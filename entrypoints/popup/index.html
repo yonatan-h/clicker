@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Hello World Extension</title>
+    <title>See Browse</title>
     <style>
       body {
         font-family: sans-serif;
@@ -19,15 +19,28 @@
         border-radius: 4px;
         cursor: pointer;
         font-weight: bold;
+        width: 100%;
       }
       button:hover { background: #0e906f; }
       #message { margin-top: 15px; font-size: 14px; color: #555; }
+      #ask-user-prompt {
+        margin: 12px 0;
+        padding: 10px;
+        background: #fff3cd;
+        border: 1px solid #ffc107;
+        border-radius: 4px;
+        font-size: 13px;
+        text-align: left;
+        display: none;
+      }
     </style>
   </head>
   <body>
-    <h2>H1 to ChatGPT</h2>
-    <button id="click-me">Send H1 to ChatGPT</button>
-    <p id="message">Waiting...</p>
+    <h2>See Browse</h2>
+    <div id="ask-user-prompt"></div>
+    <button id="start-btn">Start Agent</button>
+    <button id="continue-btn" style="display: none; background: #2563eb;">Continue</button>
+    <p id="message"></p>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>
