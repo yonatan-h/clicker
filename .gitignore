@@ -1,3 +1,4 @@
 .wxt
 node_modules
 .output
+artifacts/

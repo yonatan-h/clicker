@@ -4,12 +4,19 @@ export default defineConfig({
   manifest: {
     name: 'See Browse',
     description: 'AI browser automation agent',
-    permissions: ['activeTab', 'scripting', 'tabs'],
+    permissions: ['activeTab', 'scripting', 'tabs', 'storage'],
     host_permissions: [
-      'http://localhost/*',
-      'http://127.0.0.1/*',
-      'https://chatgpt.com/*',
+      '<all_urls>',
+      'https://generativelanguage.googleapis.com/*',
     ],
+    commands: {
+      'wxt:reload-extension': {
+        description: 'Reload extension during development',
+      },
+    },
   },
   modules: [],
 });
+
+
+
