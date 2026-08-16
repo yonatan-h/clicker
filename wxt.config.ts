@@ -4,7 +4,7 @@ export default defineConfig({
   manifest: {
     name: 'See Browse',
     description: 'AI browser automation agent',
-    permissions: ['activeTab', 'scripting', 'tabs', 'storage'],
+    permissions: ['activeTab', 'scripting', 'tabs', 'storage', 'debugger'],
     host_permissions: [
       '<all_urls>',
       'https://generativelanguage.googleapis.com/*',
