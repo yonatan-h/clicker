@@ -39,6 +39,10 @@ export async function cdpSnapshot(tabId: number): Promise<string | null> {
       { frameId }
     )) as { nodes: AXNode[] };
 
+    // DEBUG: Log what Chrome actually returned
+    console.log(`[snapshot] Got ${nodes.length} nodes from CDP`);
+    console.log("[snapshot] First 5 nodes:", JSON.stringify(nodes.slice(0, 5), null, 2));
+
     // 4. Create a map for quick node lookups by their ID
     const nodeMap = new Map<string, AXNode>();
     for (const n of nodes) nodeMap.set(n.nodeId, n);
@@ -57,8 +61,14 @@ export async function cdpSnapshot(tabId: number): Promise<string | null> {
     function walk(nodeId: string, indent: string) {
       const node = nodeMap.get(nodeId);
       
-      // Skip nodes that don't exist or are explicitly ignored by screen readers
-      if (!node || node.ignored) return;
+      // Skip nodes that don't exist
+      if (!node) return;
+
+      // If the node is ignored, don't print it but still walk its children
+      if (node.ignored) {
+        for (const childId of node.childIds || []) walk(childId, indent);
+        return;
+      }
 
       const role = node.role?.value || "";
       const name = node.name?.value || "";
