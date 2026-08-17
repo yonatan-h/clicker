@@ -2,8 +2,8 @@ import { defineConfig } from 'wxt';
 
 export default defineConfig({
   manifest: {
-    name: 'See Browse',
-    description: 'AI browser automation agent',
+    name: 'Clicker',
+    description: 'An agentic helper that clicks and types in your browser in real time',
     permissions: ['activeTab', 'scripting', 'tabs', 'storage', 'debugger'],
     host_permissions: [
       '<all_urls>',

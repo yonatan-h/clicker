@@ -1,15 +1,12 @@
 {
-  "name": "see-browse",
-  "description": "Chrome extension that captures localhost page state for AI-assisted testing",
+  "name": "clicker",
+  "description": "An agentic helper that clicks and types in your browser in real time",
   "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "wxt",
-    "dev:firefox": "wxt -b firefox",
     "build": "wxt build",
-    "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
-    "zip:firefox": "wxt zip -b firefox",
     "postinstall": "wxt prepare"
   },
   "devDependencies": {
