@@ -46,7 +46,7 @@ export default defineContentScript({
     container.style.top = "100px";
 
     const findEl = (id: string): HTMLElement | ActionResult => {
-      const el = document.querySelector(`[data-ai-id="${id}"]`) as HTMLElement;
+      const el = document.querySelector(`[data-clickeru7i8p-id="${id}"]`) as HTMLElement;
       if (!el) return { message: `Element [${id}] not found`, isError: true };
       return el;
     };

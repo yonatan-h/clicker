@@ -3,6 +3,7 @@ import { browser } from "wxt/browser";
 type Action =
   | { thought: string; action: "click"; id: string }
   | { thought: string; action: "type"; id: string; text: string }
+  | { thought: string; action: "view"; viewQuery: string }
   | { thought: string; action: "done" };
 
 type ActionResult = { message: string; isError: boolean };
@@ -13,6 +14,7 @@ function buildSystemPrompt(goal: string) {
 Actions:
 - Click: {"thought": "...", "action": "click", "id": "3"}
 - Type:  {"thought": "...", "action": "type", "id": "3", "text": "hello"}
+- View:  {"thought": "...", "action": "view", "viewQuery": "nav"}
 - Done:  {"thought": "summary of what you found", "action": "done"}
 
 Rules:
@@ -20,6 +22,7 @@ Rules:
 2. The "id" is always a number from the snapshot tree (e.g. "3", "12"). Never use selectors or text.
 3. Do NOT return "done" until you see the actual result on the page. Your final "thought" must state concrete findings.
 4. After typing into a search/form, look for a submit button. If none exists, the results may have updated automatically.
+5. If the snapshot is truncated or you need to see more detail inside a container, use the "view" action with a CSS selector.
 
 goal: ${goal}
 `;
@@ -66,7 +69,7 @@ const content = {
   },
 };
 
-import { cdpSnapshot } from "../utils/snapshot";
+import { snapshot } from "../utils/snapshot";
 
 interface GeminiResponse {
   candidates: {
@@ -158,6 +161,52 @@ async function callGemini(
   return null;
 }
 
+function buildMessage(
+  systemPrompt: string,
+  history: { role: string; parts: { text: string }[] }[],
+) {
+  const divider = "─".repeat(60);
+  const sections: string[] = [];
+
+  // System instruction — exactly as sent in systemInstruction.parts[0].text
+  sections.push(`${divider}\n📋 systemInstruction\n${divider}\n${systemPrompt}`);
+
+  // Contents — exactly the history array sent in "contents"
+  sections.push(`${divider}\n📜 contents (${history.length} messages)\n${divider}`);
+  const messageSizes: { index: number; role: string; words: number }[] = [];
+  for (let i = 0; i < history.length; i++) {
+    const msg = history[i];
+    const icon = msg.role === "user" ? "👤" : "🤖";
+    const text = msg.parts.map((p) => p.text).join("\n");
+    const words = text.split(/\s+/).filter(Boolean).length;
+    messageSizes.push({ index: i, role: msg.role, words });
+    sections.push(`${icon} [${i}] role="${msg.role}" (~${words} words)\n${text}`);
+  }
+
+  // Generation config
+  sections.push(`${divider}\n⚙️ generationConfig\n${divider}\n{ temperature: 0.1 }`);
+
+  // --- Metadata ---
+  const allText = `${systemPrompt} ${history.map((m) => m.parts.map((p) => p.text).join(" ")).join(" ")}`;
+  const totalWords = allText.split(/\s+/).filter(Boolean).length;
+  const totalChars = allText.length;
+  const estTokens = Math.round(totalWords * 1.3);
+  const systemWords = systemPrompt.split(/\s+/).filter(Boolean).length;
+  const largest = messageSizes.reduce((a, b) => (a.words > b.words ? a : b), messageSizes[0]);
+  const userTurns = history.filter((m) => m.role === "user").length;
+  const modelTurns = history.filter((m) => m.role === "model").length;
+
+  const meta = [
+    `📊 CONTEXT SUMMARY`,
+    `   Total: ~${totalWords} words / ~${totalChars} chars → ~${estTokens} tokens est.`,
+    `   Turns: ${history.length} (${userTurns} user, ${modelTurns} model)`,
+    `   System prompt: ~${systemWords} words (${((systemWords / totalWords) * 100).toFixed(1)}% of context)`,
+    `   Largest message: [${largest.index}] ${largest.role} (~${largest.words} words)`,
+  ].join("\n");
+
+  return `${meta}\n\n${sections.join("\n\n")}`;
+}
+
 async function runAgentLoop(tabId: number, goal: string) {
   const { geminiApiKey } = (await browser.storage.local.get(
     "geminiApiKey",
@@ -174,26 +223,32 @@ async function runAgentLoop(tabId: number, goal: string) {
   const history: { role: string; parts: { text: string }[] }[] = [];
   const systemPrompt = buildSystemPrompt(goal);
 
-  for (let step = 1; step <= 15; step++) {
-    console.log(`\n${step} ${"─".repeat(60)}`);
+  let currentSelector = "body";
+  let lastActionStatus = "None (first step)";
 
+  for (let step = 1; step <= 15; step++) {
     await content.showThought(tabId, "Getting snapshot ...");
-    const snap = await cdpSnapshot(tabId);
+    const snap = await snapshot(tabId, currentSelector);
     if (!snap) {
       await content.showThought(tabId, "snapshot failed!");
       console.error("Snapshot failed");
       break;
     }
 
-    const userMsg = `Current page:\n${snap}`;
-    history.push({ role: "user", parts: [{ text: userMsg }] });
-    console.log("%c[Extension → Gemini]", "color:#60a5fa", userMsg);
+    const tab = await browser.tabs.get(tabId);
+    const contextStr = `Page: ${tab.title}\nURL: ${tab.url}\nPrevious Action Status: ${lastActionStatus}`;
+    
+    // The massive string sent ONLY for the current turn
+    const currentTurnMsg = `${contextStr}\n\n[SUMMARY]\n${snap.summary}\n\n[SNAPSHOT (Selector: ${currentSelector})]\n${snap.snapshot}`;
+    
+    // Create a temporary history array to send to Gemini
+    const requestHistory = [...history, { role: "user", parts: [{ text: currentTurnMsg }] }];
+
+    console.log(buildMessage(systemPrompt, requestHistory));
 
     await content.showThought(tabId, "Model thinking...");
-    const raw = await callGemini(geminiApiKey, history, tabId, systemPrompt);
+    const raw = await callGemini(geminiApiKey, requestHistory, tabId, systemPrompt);
     if (!raw) break;
-    console.log("%c[Gemini → Extension]", "color:#fff", raw);
-    history.push({ role: "model", parts: [{ text: raw }] });
 
     let action: Action;
     try {
@@ -204,12 +259,15 @@ async function runAgentLoop(tabId: number, goal: string) {
         "Failed to understand model response when parsing",
       );
       console.error("Failed to parse JSON:", raw);
+      
+      // Update history and status for failure
+      history.push({ role: "user", parts: [{ text: contextStr }] });
+      history.push({ role: "model", parts: [{ text: raw }] });
+      lastActionStatus = "Error: Failed to parse model JSON.";
       continue;
     }
 
-    console.log(`[Step ${step}] action=${action.action}`, action);
-
-    let result: ActionResult;
+    let result: ActionResult | null = null;
     if (action.action === "click") {
       await content.showThought(tabId, action.thought);
       await content.moveTo(tabId, action.id);
@@ -221,26 +279,40 @@ async function runAgentLoop(tabId: number, goal: string) {
       );
       await content.moveTo(tabId, action.id);
       result = await content.doType(tabId, action.id, action.text);
+    } else if (action.action === "view") {
+      await content.showThought(
+        tabId,
+        `${action.thought}\n🔍 Viewing: "${action.viewQuery}"`,
+      );
+      currentSelector = action.viewQuery;
+      
+      // Update history before skipping to next loop
+      history.push({ role: "user", parts: [{ text: contextStr }] });
+      history.push({ role: "model", parts: [{ text: raw }] });
+      lastActionStatus = `Viewed selector "${action.viewQuery}"`;
+      continue;
     } else if (action.action === "done") {
       await content.showThought(tabId, action.thought);
-      console.log("Agent finished:", action.thought);
       return;
     } else {
       await content.showThought(
         tabId,
         `Failed to understand model response when parsing. Model action: ${action}`,
       );
-      console.warn("Unknown action:", action);
+      history.push({ role: "user", parts: [{ text: contextStr }] });
+      history.push({ role: "model", parts: [{ text: raw }] });
+      lastActionStatus = "Error: Unknown action type.";
       continue;
     }
 
-    console.log(`[Result]`, result);
+    // After successful execution (click or type), update history and set next status
+    history.push({ role: "user", parts: [{ text: contextStr }] });
+    history.push({ role: "model", parts: [{ text: raw }] });
 
-    if (result.isError) {
-      history.push({
-        role: "user",
-        parts: [{ text: `Error: ${result.message}` }],
-      });
+    if (result && result.isError) {
+      lastActionStatus = `Error: ${result.message}`;
+    } else {
+      lastActionStatus = "Success";
     }
 
     await new Promise((r) => setTimeout(r, 2000));
@@ -267,8 +339,8 @@ export default defineBackground(() => {
           .then(async ([tab]) => {
             if (tab?.id) {
               console.log("Fetching snapshot...");
-              const snap = await cdpSnapshot(tab.id);
-              console.log("=== MANUAL SNAPSHOT ===\n" + snap);
+              const snap = await snapshot(tab.id);
+              console.log("=== MANUAL SNAPSHOT ===\n" + (snap ? `Summary:\n${snap.summary}\n\nSnapshot:\n${snap.snapshot}` : 'null'));
             }
           });
         sendResponse({ snapshotStarted: true });
