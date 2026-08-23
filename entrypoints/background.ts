@@ -169,10 +169,14 @@ function buildMessage(
   const sections: string[] = [];
 
   // System instruction — exactly as sent in systemInstruction.parts[0].text
-  sections.push(`${divider}\n📋 systemInstruction\n${divider}\n${systemPrompt}`);
+  sections.push(
+    `${divider}\n📋 systemInstruction\n${divider}\n${systemPrompt}`,
+  );
 
   // Contents — exactly the history array sent in "contents"
-  sections.push(`${divider}\n📜 contents (${history.length} messages)\n${divider}`);
+  sections.push(
+    `${divider}\n📜 contents (${history.length} messages)\n${divider}`,
+  );
   const messageSizes: { index: number; role: string; words: number }[] = [];
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
@@ -180,11 +184,15 @@ function buildMessage(
     const text = msg.parts.map((p) => p.text).join("\n");
     const words = text.split(/\s+/).filter(Boolean).length;
     messageSizes.push({ index: i, role: msg.role, words });
-    sections.push(`${icon} [${i}] role="${msg.role}" (~${words} words)\n${text}`);
+    sections.push(
+      `${icon} [${i}] role="${msg.role}" (~${words} words)\n${text}`,
+    );
   }
 
   // Generation config
-  sections.push(`${divider}\n⚙️ generationConfig\n${divider}\n{ temperature: 0.1 }`);
+  sections.push(
+    `${divider}\n⚙️ generationConfig\n${divider}\n{ temperature: 0.1 }`,
+  );
 
   // --- Metadata ---
   const allText = `${systemPrompt} ${history.map((m) => m.parts.map((p) => p.text).join(" ")).join(" ")}`;
@@ -192,7 +200,10 @@ function buildMessage(
   const totalChars = allText.length;
   const estTokens = Math.round(totalWords * 1.3);
   const systemWords = systemPrompt.split(/\s+/).filter(Boolean).length;
-  const largest = messageSizes.reduce((a, b) => (a.words > b.words ? a : b), messageSizes[0]);
+  const largest = messageSizes.reduce(
+    (a, b) => (a.words > b.words ? a : b),
+    messageSizes[0],
+  );
   const userTurns = history.filter((m) => m.role === "user").length;
   const modelTurns = history.filter((m) => m.role === "model").length;
 
@@ -237,17 +248,25 @@ async function runAgentLoop(tabId: number, goal: string) {
 
     const tab = await browser.tabs.get(tabId);
     const contextStr = `Page: ${tab.title}\nURL: ${tab.url}\nPrevious Action Status: ${lastActionStatus}`;
-    
+
     // The massive string sent ONLY for the current turn
     const currentTurnMsg = `${contextStr}\n\n[SUMMARY]\n${snap.summary}\n\n[SNAPSHOT (Selector: ${currentSelector})]\n${snap.snapshot}`;
-    
+
     // Create a temporary history array to send to Gemini
-    const requestHistory = [...history, { role: "user", parts: [{ text: currentTurnMsg }] }];
+    const requestHistory = [
+      ...history,
+      { role: "user", parts: [{ text: currentTurnMsg }] },
+    ];
 
     console.log(buildMessage(systemPrompt, requestHistory));
 
     await content.showThought(tabId, "Model thinking...");
-    const raw = await callGemini(geminiApiKey, requestHistory, tabId, systemPrompt);
+    const raw = await callGemini(
+      geminiApiKey,
+      requestHistory,
+      tabId,
+      systemPrompt,
+    );
     if (!raw) break;
 
     let action: Action;
@@ -259,7 +278,7 @@ async function runAgentLoop(tabId: number, goal: string) {
         "Failed to understand model response when parsing",
       );
       console.error("Failed to parse JSON:", raw);
-      
+
       // Update history and status for failure
       history.push({ role: "user", parts: [{ text: contextStr }] });
       history.push({ role: "model", parts: [{ text: raw }] });
@@ -285,7 +304,7 @@ async function runAgentLoop(tabId: number, goal: string) {
         `${action.thought}\n🔍 Viewing: "${action.viewQuery}"`,
       );
       currentSelector = action.viewQuery;
-      
+
       // Update history before skipping to next loop
       history.push({ role: "user", parts: [{ text: contextStr }] });
       history.push({ role: "model", parts: [{ text: raw }] });
@@ -320,6 +339,14 @@ async function runAgentLoop(tabId: number, goal: string) {
 }
 
 export default defineBackground(() => {
+  browser.tabs.query({ active: true, windowType: "normal" }).then((tabs) => {
+    const tab = tabs[0];
+    if (tab?.id) {
+      snapshot(tab.id, "body").then((x) =>
+        console.log("SNAPSHOT RESULT:\n", x),
+      );
+    }
+  });
   browser.runtime.onMessage.addListener(
     (message: any, _sender, sendResponse) => {
       if (message?.action === "START") {
@@ -340,7 +367,12 @@ export default defineBackground(() => {
             if (tab?.id) {
               console.log("Fetching snapshot...");
               const snap = await snapshot(tab.id);
-              console.log("=== MANUAL SNAPSHOT ===\n" + (snap ? `Summary:\n${snap.summary}\n\nSnapshot:\n${snap.snapshot}` : 'null'));
+              console.log(
+                "=== MANUAL SNAPSHOT ===\n" +
+                  (snap
+                    ? `Summary:\n${snap.summary}\n\nSnapshot:\n${snap.snapshot}`
+                    : "null"),
+              );
             }
           });
         sendResponse({ snapshotStarted: true });
