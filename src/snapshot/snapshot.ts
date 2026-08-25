@@ -1,4 +1,5 @@
 import { browser } from "wxt/browser";
+import { ID_ATTR, type SnapshotResult } from "../utils/shared";
 
 interface CNode {
   element: Element;
@@ -12,17 +13,14 @@ interface CNode {
   interactableNodes: number;
 }
 
-export async function snapshot(
-  tabId: number,
-  querySelector: string = "body",
-): Promise<{ summary: string; snapshot: string } | null> {
+export async function takeSnapshot(tabId: number): Promise<SnapshotResult> {
   console.log(tabId);
   try {
     const results = await browser.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
-      args: [querySelector],
-      func: (selector: string) => {
+      args: [ID_ATTR],
+      func: (ID_ATTR: string): SnapshotResult => {
         const makeCNode = (element: Element) => {
           const node: CNode = {
             element,
@@ -42,6 +40,8 @@ export async function snapshot(
         let root: CNode = makeCNode(document.body);
         const dummyNode = makeCNode(document.createElement("div"));
         const pruneStats: Record<string, number> = {};
+        const GRAY = "\x1B[90m";
+        const RESET = "\x1B[0m";
         const addStat = (key: string, record: Record<string, number>) => {
           record[key] = record[key] || 0;
           record[key]++;
@@ -103,10 +103,11 @@ export async function snapshot(
               child.nodeType === Node.TEXT_NODE &&
               child.nodeValue?.trim() !== ""
             ) {
-              textContent = child.nodeValue?.trim() || "";
+              textContent += child.nodeValue?.trim() + " ";
               isSemantic = true;
             }
           }
+          textContent = textContent.trim();
 
           const role = node.element.getAttribute("role")?.trim();
           const isSemanticRole =
@@ -153,7 +154,6 @@ export async function snapshot(
 
         const buildTree = (node: CNode) => {
           runningId++;
-          const ID_ATTR = "data-clicker4jf8-id";
           const props = getSemanticProperties(node);
           node.id = runningId;
           node.children = [];
@@ -169,6 +169,24 @@ export async function snapshot(
           }
 
           return node;
+        };
+
+        const getPrunedInnerText = (node: CNode): string => {
+          let text = "";
+          for (const childNode of Array.from(node.element.childNodes)) {
+            if (childNode.nodeType === Node.TEXT_NODE) {
+              text += childNode.nodeValue + " ";
+            } else if (childNode.nodeType === Node.ELEMENT_NODE) {
+              const el = childNode as Element;
+              const matches = node.children.filter(
+                (c) => c.element === el || el.contains(c.element),
+              );
+              for (const child of matches) {
+                text += getPrunedInnerText(child) + " ";
+              }
+            }
+          }
+          return text.trim().replace(/\s+/g, " ");
         };
 
         const pruneTree = (node: CNode): CNode | null => {
@@ -220,9 +238,10 @@ export async function snapshot(
             return null;
           }
 
-          if (!node.isSemantic && node.children.length === 1) {
+          const children = node.children;
+          if (!node.isSemantic && children.length === 1) {
             addStat("single-child-layout-wrapper", pruneStats);
-            return node.children[0];
+            return node.children[0] || null;
           }
 
           return node;
@@ -262,7 +281,7 @@ export async function snapshot(
               node.textContent =
                 input.value || input.placeholder + "(placeholder)" || "";
             } else {
-              node.textContent = (el as HTMLElement).innerText || "";
+              node.textContent = getPrunedInnerText(node);
             }
 
             //img
@@ -280,16 +299,19 @@ export async function snapshot(
             ) {
               delete node.semanticProperties.href;
             }
+            node.isSemantic = true;
             node.children = [];
           } else if (tag === "svg") {
+            node.isSemantic = true;
             node.children = [];
           } else if (
             textTags.includes(tag) &&
             node.interactableNodes === 0 &&
             !el.querySelector("img, svg, picture") &&
-            el.textContent?.trim()
+            getPrunedInnerText(node)
           ) {
-            node.textContent = `"${el.textContent.replace(/\s+/g, " ").trim()}"`;
+            node.textContent = getPrunedInnerText(node);
+            node.isSemantic = true;
             node.children = [];
           } else {
             node.children = node.children
@@ -302,12 +324,21 @@ export async function snapshot(
 
         const pruneProperties = (node: CNode) => {
           //de-duplicate aria titles, text content, and title
-          const props = Object.entries(node.semanticProperties);
-          const titlishKeys = ["aria-label", "title", "aria-labelledby"];
+          let props = Object.entries(node.semanticProperties);
+          const titlishKeys = [
+            "aria-label",
+            "title",
+            "aria-labelledby",
+            "inner-img",
+          ];
           for (let i = 0; i < props.length; i++) {
-            const [key1, val1] = props[i];
+            const keyVal1 = props[i];
+            if (!keyVal1) continue;
+            const [key1, val1] = keyVal1;
             for (let j = i + 1; j < props.length; j++) {
-              const [key2, val2] = props[j];
+              const keyVal2 = props[j];
+              if (!keyVal2) continue;
+              const [key2, val2] = keyVal2;
               if (
                 val1 === val2 &&
                 titlishKeys.includes(key1) &&
@@ -318,6 +349,7 @@ export async function snapshot(
             }
           }
 
+          props = Object.entries(node.semanticProperties);
           //de-duplicate aria, titles etc with text content
           for (const [key, val] of props) {
             const sameText =
@@ -347,10 +379,14 @@ export async function snapshot(
         ) => {
           const propsStr = Object.entries(node.semanticProperties)
             .map(([k, v]) => `${k}=${v}`)
-            .join(", ");
-          let str = `${"| ".repeat(depth)}${node.element.tagName.toLowerCase()}[id=${node.id}]${
-            devMode ? `[ semanticNodes=${node.semanticNodes} ]` : ""
-          }${propsStr ? `[${propsStr}]` : ""}${node.textContent.replace(/\n/g, "\\n")}\n`;
+            .join(" ");
+
+          const textContent = node.textContent.replace(/\n/g, "\\n");
+          let str = `${(devMode ? "| " : "\t").repeat(depth)}${node.element.tagName.toLowerCase()} #${node.id}${
+            devMode
+              ? `${GRAY} sem=${node.semanticNodes}|int=${node.interactableNodes} ${RESET}`
+              : ""
+          }${propsStr ? ` ${propsStr}` : ""}${textContent ? ` > ${textContent}` : ""}\n`;
 
           for (const child of node.children) {
             str += stringifyTree(child, depth + 1, devMode);
@@ -367,17 +403,31 @@ export async function snapshot(
             return nodes;
           };
 
+          const countWords = (node: CNode) => {
+            let words = 0;
+            words += node.textContent.split(" ").length;
+            for (const child of node.children) {
+              words += countWords(child);
+            }
+            return words;
+          };
+
           const nodes = countNodes(tree);
+          const words = countWords(tree);
 
           const str = stringifyTree(tree, 0, false);
-          const tokens = str.replace(/\|/g, " ").split(" ").length;
+          const tokens = str.match(/[\w]+|[^\s\w]/g)?.length || 0;
 
-          return `[${nodes.toLocaleString()} nodes, ${tokens.toLocaleString()} tokens]`;
+          return `[${nodes.toLocaleString()} nodes, ${words.toLocaleString()} words, ${tokens.toLocaleString()} tokens]`;
         };
 
         buildTree(root);
         recalculateCounts(root);
         const originalSize = count(root);
+
+        root = pruneTree(root) || dummyNode;
+        recalculateCounts(root);
+        const afterPrune = count(root);
 
         root = compressLeaves(root) || dummyNode;
         recalculateCounts(root);
@@ -387,28 +437,38 @@ export async function snapshot(
         recalculateCounts(root);
         const afterPruneProperties = count(root);
 
-        root = pruneTree(root) || dummyNode;
-        recalculateCounts(root);
-        const afterPrune = count(root);
-
         console.log(pruneStats);
 
-        const summary = `Elements count: original=${originalSize}, after-compress=${afterCompress}, after-prune-props=${afterPruneProperties} after-prune=${afterPrune}`;
+        const summary = `original: ${originalSize}\nafter-prune: ${afterPrune}\nafter-compress: ${afterCompress}\nafter-prune-props: ${afterPruneProperties}`;
+        console.log(stringifyTree(root, 0, false));
         console.log(summary);
-        console.log(stringifyTree(root, 0, true));
         return {
-          summary,
-          snapshot: stringifyTree(root, 0, true),
+          success: true,
+          snapshot: stringifyTree(root, 0, false),
+          pageTitle: document.title,
+          pageUrl: window.location.href,
         };
       },
     });
 
-    if (results && results[0] && results[0].result) {
-      return results[0].result as { summary: string; snapshot: string };
+    if (results && results.length > 0 && results[0]?.result) {
+      return results[0].result as SnapshotResult;
     }
-    return null;
+    return {
+      success: false,
+      error: "No results from script injection",
+      snapshot: "<snapshot could not be taken>",
+      pageTitle: "<unknown>",
+      pageUrl: "<unknown>",
+    };
   } catch (err) {
     console.error("DOM snapshot error:", err);
-    return null;
+    return {
+      success: false,
+      error: JSON.stringify(err),
+      snapshot: "<snapshot could not be taken>",
+      pageTitle: "<unknown>",
+      pageUrl: "<unknown>",
+    };
   }
 }
