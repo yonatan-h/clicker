@@ -6,10 +6,11 @@ import {
   type SnapshotResult,
   type UIRequest,
   type UIResponse,
+  type AgentUIState,
   sendToUI,
 } from "../utils/shared";
 
-type HistoryItem = { role: "harness" | "model"; parts: { text: string }[] };
+type HistoryItem = { role: "USER" | "MODEL"; parts: { text: string }[] };
 type ToolCall =
   | { type: "click"; id: number; thought: string }
   | { type: "type"; id: number; text: string; thought: string }
@@ -29,6 +30,7 @@ type RateLimitInfo = {
 export class Agent {
   //todo: use xml tags to separate. background, instructions, tools
   private history: HistoryItem[] = [];
+  private state: AgentUIState["state"] = "not-started";
   private rateLimit: RateLimitInfo = {
     reqPerMin: 30,
     tokenPerMin: 16000,
@@ -50,21 +52,42 @@ export class Agent {
     this.goal = goal;
   }
 
+  public uiState: AgentUIState = {
+    targetId: null,
+    state: "not-started",
+    isThinking: false,
+    thought: null,
+  };
+
+  public async syncUI(partial?: Partial<AgentUIState>) {
+    if (partial) {
+      this.uiState = {
+        ...this.uiState,
+        ...partial,
+        state: this.state,
+      };
+    }
+    await sendToUI(this.tabId, { type: "SYNC_STATE", state: this.uiState });
+  }
+
   public stop() {
-    sendToUI(this.tabId, { type: "UPDATE_THINKING", isThinking: false });
-    sendToUI(this.tabId, { type: "SHOW_THOUGHT", text: "Stopped" });
-    this._isStopped = true;
+    this.state = "finished";
+    this.syncUI({ state: "finished", isThinking: false, thought: "Stopped" });
   }
   public processEvent(event: BGRequest): BGResponse {
     if (event.type === "STOP") {
       this.stop();
-      return { isOk: true, message: "stopped" };
+      return { isOk: true, message: "Stopped" };
+    }
+
+    if (event.type === "GET_STATE") {
+      return { isOk: true, message: "State retrieved", state: this.uiState };
     }
 
     return { isOk: false, message: `Unknown event type ${event.type}` };
   }
 
-  async callModel(
+  async fakeCallModel(
     systemPrompt: string,
     currentPrompt: string,
   ): Promise<string | null> {
@@ -76,12 +99,17 @@ export class Agent {
       id: -1,
     };
     return JSON.stringify(dummyCall);
+  }
 
+  async callModel(
+    systemPrompt: string,
+    currentPrompt: string,
+  ): Promise<string | null> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=${encodeURIComponent(this.apiKey)}`;
 
     const requestContents = [
       ...this.history,
-      { role: "harness", parts: [{ text: currentPrompt }] },
+      { role: "USER", parts: [{ text: currentPrompt }] },
     ];
 
     this.tokenLog.push({
@@ -146,7 +174,7 @@ export class Agent {
     modelResponse: ToolCall | string;
   }): void {
     this.history.push({
-      role: "harness",
+      role: "USER",
       parts: [
         {
           text: `Previous Action Status: ${args.previousActionStatus}\nPage URL: ${args.pageUrl}\nPage Title: ${args.pageTitle}`,
@@ -155,7 +183,7 @@ export class Agent {
     });
 
     this.history.push({
-      role: "model",
+      role: "MODEL",
       parts: [
         {
           text:
@@ -171,7 +199,6 @@ export class Agent {
     const result = await takeSnapshot(this.tabId);
     return result;
   }
-  private _isStopped = false;
 
   buildPrompt(args: {
     pageTitle: string;
@@ -281,7 +308,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
 
     let i = 0;
     for (const msg of info.payloadInfo.history) {
-      const icon = msg.role === "harness" ? "👤" : "🤖";
+      const icon = msg.role === "MODEL" ? "👤" : "🤖";
       const text = msg.parts.map((p) => p.text).join("\n");
       const words = text.split(/\s+/).filter(Boolean).length;
       sections.push(
@@ -292,7 +319,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
 
     const currentWords = currentTurnMessage.split(/\s+/).filter(Boolean).length;
     sections.push(
-      `👤 [${i}] role="harness" (~${currentWords} words)\n${currentTurnMessage}`,
+      `👤 [${i}] role="USER" (~${currentWords} words)\n${currentTurnMessage}`,
     );
 
     console.log(sections.join("\n\n"));
@@ -303,17 +330,23 @@ Respond ONLY with a JSON object matching one of the tools.`;
   }
 
   async runGameLoop() {
-    this._isStopped = false;
+    if (this.state === "running") {
+      return console.log("already running");
+    }
+
+    this.state = "running";
+    this.syncUI({ thought: `Goal: ${this.goal}`, targetId: null });
+    await this.sleep(1000);
+
     let previousActionStatus = "None (first step)";
 
     for (let step = 1; step <= 30; step++) {
-      if (this._isStopped) {
+      if (this.state !== "running") {
         console.log("Agent execution stopped by user.");
         break;
       }
-
       const snapResult = await this.getUISnapshot();
-      if (this._isStopped) break;
+      if (this.state !== "running") break;
       if (!snapResult.success) {
         previousActionStatus = `Snapshot Error: ${snapResult.error}`;
         await this.sleep(2000);
@@ -339,12 +372,12 @@ Respond ONLY with a JSON object matching one of the tools.`;
 
       this.printActivity(systemPrompt, turnMessage);
 
-      if (this._isStopped) break;
-      sendToUI(this.tabId, { type: "SHOW_THOUGHT", text: "Thinking..." });
-      sendToUI(this.tabId, { type: "UPDATE_THINKING", isThinking: true });
+      if (this.state !== "running") break;
+      this.syncUI({ isThinking: true });
       const raw = await this.callModel(systemPrompt, turnMessage);
-      sendToUI(this.tabId, { type: "UPDATE_THINKING", isThinking: false });
-      if (this._isStopped) break;
+      // const raw = await this.fakeCallModel(systemPrompt, turnMessage);
+      this.syncUI({ isThinking: false });
+      if (this.state !== "running") break;
       if (!raw) {
         previousActionStatus = "API Error: No response or network failure";
         await this.sleep(2000);
@@ -368,26 +401,25 @@ Respond ONLY with a JSON object matching one of the tools.`;
       let uiRes: { message: string; isError: boolean };
 
       if ("thought" in action && action.thought) {
-        await sendToUI(this.tabId, {
-          type: "SHOW_THOUGHT",
-          text: action.thought,
-        });
+        this.syncUI({ thought: action.thought });
       }
 
       if (action.type === "click") {
-        await sendToUI(this.tabId, { type: "MOVE_CURSOR", id: action.id });
+        this.syncUI({ targetId: action.id });
         await this.sleep(2000);
         uiRes = await sendToUI(this.tabId, {
           type: "DO_CLICK",
           id: action.id,
+          state: this.uiState,
         });
       } else if (action.type === "type") {
-        await sendToUI(this.tabId, { type: "MOVE_CURSOR", id: action.id });
+        this.syncUI({ targetId: action.id });
         await this.sleep(2000);
         uiRes = await sendToUI(this.tabId, {
           type: "DO_TYPE",
           id: action.id,
           text: action.text,
+          state: this.uiState,
         });
       } else if (action.type === "navigate") {
         uiRes = { message: "Navigate is not implemented", isError: true };
@@ -395,14 +427,8 @@ Respond ONLY with a JSON object matching one of the tools.`;
         uiRes = { message: "Ask User is not implemented", isError: true };
       } else if (action.type === "done") {
         console.log("Agent finished task:", action.result);
-        await sendToUI(this.tabId, {
-          type: "SHOW_THOUGHT",
-          text: action.result,
-        });
-        await sendToUI(this.tabId, {
-          type: "UPDATE_THINKING",
-          isThinking: false,
-        });
+        this.stop();
+        this.syncUI({ targetId: null, thought: action.result });
         break;
       } else {
         uiRes = { message: "Unknown action type", isError: true };
@@ -422,8 +448,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
         previousActionStatus = uiRes.message;
       }
 
-      if (this._isStopped) break;
-      await this.sleep(2000);
+      if (this.state !== "running") break;
     }
   }
 }

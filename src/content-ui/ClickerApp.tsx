@@ -4,14 +4,19 @@ import {
   ID_ATTR,
   type UIResponse,
   type UIRequest,
+  type AgentUIState,
   sendToBg,
 } from "@/src/utils/shared";
 import Arrow from "./arrow/Arrow";
 
 export default function ClickerApp() {
+  const [uiState, setUiState] = useState<AgentUIState>({
+    targetId: null,
+    state: 'not-started',
+    isThinking: false,
+    thought: null,
+  });
   const [pos, setPos] = useState<{ x: number; y: number }>({ x: 10, y: 10 });
-  const [thinking, setThinking] = useState(false);
-  const [thought, setThought] = useState<string | null>(null);
 
   const findEl = (id: number): HTMLElement | null => {
     const el = document.querySelector(`[${ID_ATTR}="${id}"]`);
@@ -20,17 +25,49 @@ export default function ClickerApp() {
   };
 
   useEffect(() => {
-    setPos({ x: 100, y: 100 });
+    const updatePos = () => {
+      if (uiState.targetId !== null) {
+        const el = findEl(uiState.targetId);
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          setPos({
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+          });
+          return;
+        }
+      }
+      
+      setPos({
+        x: window.innerWidth / 4,
+        y: window.innerHeight / 4,
+      });
+    };
+
+    updatePos();
+    const interval = setInterval(updatePos, 1000);
+    return () => clearInterval(interval);
+  }, [uiState.targetId]);
+
+  useEffect(() => {
+    sendToBg({ type: "GET_STATE" }).then((res) => {
+      if (res.isOk && res.state) {
+        setUiState(res.state);
+      }
+    });
 
     const listener = (
       _request: unknown,
       _sender: any,
       _sendResponse: Function,
     ) => {
+      const req = _request as UIRequest;
+      setUiState(req.state);
+
       const send = (resp: UIResponse) => {
         _sendResponse(resp);
       };
-      const req = _request as UIRequest;
+
       const elNotFound = (id: number) => ({
         message: `Element with id=${id} not found`,
         isError: true,
@@ -41,30 +78,7 @@ export default function ClickerApp() {
       });
 
       switch (req.type) {
-        case "UPDATE_THINKING": {
-          setThinking(req.isThinking);
-          send(ok());
-          break;
-        }
-        case "SHOW_THOUGHT": {
-          setThought(req.text);
-          send(ok());
-          break;
-        }
-
-        case "MOVE_CURSOR": {
-          const el = findEl(req.id);
-          if (!el) return send(elNotFound(req.id));
-
-          const rect = el.getBoundingClientRect();
-          setPos({
-            x: rect.left + rect.width / 2,
-            y: rect.top + rect.height / 2,
-          });
-
-          const prev = el.style.outline;
-          el.style.outline = "2px solid #3b82f6";
-          setTimeout(() => (el.style.outline = prev), 2000);
+        case "SYNC_STATE": {
           send(ok());
           break;
         }
@@ -104,7 +118,7 @@ export default function ClickerApp() {
 
   return (
     <div
-      className="fixed z-[2147483647] "
+      className="fixed z-[2147483647] pointer-events-none transition-all duration-300 ease-out"
       style={{
         left: `${pos.x}px`,
         top: `${pos.y}px`,
@@ -112,12 +126,23 @@ export default function ClickerApp() {
     >
       <div className="flex gap-2">
         <Arrow />
-        {thought && (
-          <div className="mt-4 flex gap-3 shadow-lg bg-primary py-1 px-3 rounded-l-2xl rounded-r-2xl text-white text-sm">
-            <p className=" max-w-[400px]">{thought}</p>
-            {thinking && (
+        {(uiState.thought || uiState.isThinking) && (
+          <div className=" flex gap-3 shadow-lg bg-primary py-1 px-3 rounded-l-2xl rounded-r-2xl text-white text-sm w-[300px]">
+            <div className="flex-1">
+              {uiState.thought && (
+                <p className=" ">{uiState.thought}</p>
+              )}
+              {uiState.isThinking && (
+                <div className="flex items-center gap-1  h-3">
+                  <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                  <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                  <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce"></div>
+                </div>
+              )}
+            </div>
+            {uiState.state === 'running' && (
               <button
-                className="cursor-pointer"
+                className="cursor-pointer pointer-events-auto"
                 onClick={async () => {
                   await sendToBg({ type: "STOP" });
                 }}
