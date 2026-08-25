@@ -5,9 +5,8 @@ import { browser } from "wxt/browser";
 import {
   getApiKey,
   getGoal,
-  storeApiKey,
-  storeGoal,
 } from "@/src/utils/storage";
+import { type BGRequest, type BGResponse, sendToBg } from "@/src/utils/shared";
 
 console.log("here");
 
@@ -22,6 +21,8 @@ export default function App() {
       if (g) setGoal(g);
     });
   }, []);
+  
+
 
   const handleStart = async () => {
     const trimmedKey = apiKey.trim();
@@ -37,13 +38,13 @@ export default function App() {
     }
 
     setIsStarting(true);
-    await storeApiKey(trimmedKey);
-    await storeGoal(trimmedGoal);
-    await browser.runtime.sendMessage({ action: "START", goal: trimmedGoal });
+    const req: BGRequest = { type: "START", goal: trimmedGoal, apiKey: trimmedKey };
+    await sendToBg(req);
   };
 
   const handleSnapshot = async () => {
-    await browser.runtime.sendMessage({ action: "SNAPSHOT" });
+    const req: BGRequest = { type: "CAPTURE_SNAPSHOT" };
+    await sendToBg(req);
   };
 
   return (

@@ -1,9 +1,12 @@
 import { takeSnapshot } from "@/src/snapshot/snapshot";
 import { browser } from "wxt/browser";
 import {
+  type BGRequest,
+  type BGResponse,
   type SnapshotResult,
   type UIRequest,
   type UIResponse,
+  sendToUI,
 } from "../utils/shared";
 
 type HistoryItem = { role: "harness" | "model"; parts: { text: string }[] };
@@ -47,10 +50,33 @@ export class Agent {
     this.goal = goal;
   }
 
+  public stop() {
+    sendToUI(this.tabId, { type: "UPDATE_THINKING", isThinking: false });
+    sendToUI(this.tabId, { type: "SHOW_THOUGHT", text: "Stopped" });
+    this._isStopped = true;
+  }
+  public processEvent(event: BGRequest): BGResponse {
+    if (event.type === "STOP") {
+      this.stop();
+      return { isOk: true, message: "stopped" };
+    }
+
+    return { isOk: false, message: `Unknown event type ${event.type}` };
+  }
+
   async callModel(
     systemPrompt: string,
     currentPrompt: string,
   ): Promise<string | null> {
+    //commentable
+    await this.sleep(10000);
+    const dummyCall: ToolCall = {
+      type: "click",
+      thought: "clicking anywhere",
+      id: -1,
+    };
+    return JSON.stringify(dummyCall);
+
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=${encodeURIComponent(this.apiKey)}`;
 
     const requestContents = [
@@ -58,14 +84,11 @@ export class Agent {
       { role: "harness", parts: [{ text: currentPrompt }] },
     ];
 
-    const totalText =
-      systemPrompt +
-      " " +
-      requestContents
-        .map((h) => h.parts.map((p) => p.text).join(" "))
-        .join(" ");
-    const tokens = this.countTokens(totalText);
-    this.tokenLog.push({ timestamp: Date.now(), tokens });
+    this.tokenLog.push({
+      timestamp: Date.now(),
+      tokens: this.getActivityInfo(systemPrompt, currentPrompt).payloadInfo
+        .totalTokens,
+    });
 
     try {
       const res = await fetch(url, {
@@ -148,22 +171,7 @@ export class Agent {
     const result = await takeSnapshot(this.tabId);
     return result;
   }
-  async requestContextUI(req: UIRequest): Promise<UIResponse> {
-    try {
-      const result = await browser.tabs.sendMessage(this.tabId, req);
-      return (
-        (result as UIResponse) || {
-          message: "No response from UI",
-          isError: true,
-        }
-      );
-    } catch (err: any) {
-      return {
-        message: `Failed to communicate with page: ${err.message}`,
-        isError: true,
-      };
-    }
-  }
+  private _isStopped = false;
 
   buildPrompt(args: {
     pageTitle: string;
@@ -295,10 +303,17 @@ Respond ONLY with a JSON object matching one of the tools.`;
   }
 
   async runGameLoop() {
+    this._isStopped = false;
     let previousActionStatus = "None (first step)";
 
     for (let step = 1; step <= 30; step++) {
+      if (this._isStopped) {
+        console.log("Agent execution stopped by user.");
+        break;
+      }
+
       const snapResult = await this.getUISnapshot();
+      if (this._isStopped) break;
       if (!snapResult.success) {
         previousActionStatus = `Snapshot Error: ${snapResult.error}`;
         await this.sleep(2000);
@@ -308,7 +323,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
         pageTitle: snapResult?.pageTitle || "<unknown>",
         pageUrl: snapResult?.pageUrl || "<unknown>",
         previousActionStatus,
-        snapshot: snapResult.snapshot || 'Could not get snapshot',
+        snapshot: snapResult.snapshot || "Could not get snapshot",
       });
 
       const info = this.getActivityInfo(systemPrompt, turnMessage);
@@ -324,7 +339,12 @@ Respond ONLY with a JSON object matching one of the tools.`;
 
       this.printActivity(systemPrompt, turnMessage);
 
+      if (this._isStopped) break;
+      sendToUI(this.tabId, { type: "SHOW_THOUGHT", text: "Thinking..." });
+      sendToUI(this.tabId, { type: "UPDATE_THINKING", isThinking: true });
       const raw = await this.callModel(systemPrompt, turnMessage);
+      sendToUI(this.tabId, { type: "UPDATE_THINKING", isThinking: false });
+      if (this._isStopped) break;
       if (!raw) {
         previousActionStatus = "API Error: No response or network failure";
         await this.sleep(2000);
@@ -348,23 +368,23 @@ Respond ONLY with a JSON object matching one of the tools.`;
       let uiRes: { message: string; isError: boolean };
 
       if ("thought" in action && action.thought) {
-        await this.requestContextUI({
+        await sendToUI(this.tabId, {
           type: "SHOW_THOUGHT",
           text: action.thought,
         });
       }
 
       if (action.type === "click") {
-        await this.requestContextUI({ type: "MOVE_CURSOR", id: action.id });
+        await sendToUI(this.tabId, { type: "MOVE_CURSOR", id: action.id });
         await this.sleep(2000);
-        uiRes = await this.requestContextUI({
+        uiRes = await sendToUI(this.tabId, {
           type: "DO_CLICK",
           id: action.id,
         });
       } else if (action.type === "type") {
-        await this.requestContextUI({ type: "MOVE_CURSOR", id: action.id });
+        await sendToUI(this.tabId, { type: "MOVE_CURSOR", id: action.id });
         await this.sleep(2000);
-        uiRes = await this.requestContextUI({
+        uiRes = await sendToUI(this.tabId, {
           type: "DO_TYPE",
           id: action.id,
           text: action.text,
@@ -375,6 +395,14 @@ Respond ONLY with a JSON object matching one of the tools.`;
         uiRes = { message: "Ask User is not implemented", isError: true };
       } else if (action.type === "done") {
         console.log("Agent finished task:", action.result);
+        await sendToUI(this.tabId, {
+          type: "SHOW_THOUGHT",
+          text: action.result,
+        });
+        await sendToUI(this.tabId, {
+          type: "UPDATE_THINKING",
+          isThinking: false,
+        });
         break;
       } else {
         uiRes = { message: "Unknown action type", isError: true };
@@ -394,6 +422,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
         previousActionStatus = uiRes.message;
       }
 
+      if (this._isStopped) break;
       await this.sleep(2000);
     }
   }

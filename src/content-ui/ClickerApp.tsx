@@ -1,13 +1,17 @@
 import { browser } from "wxt/browser";
 import { useState, useEffect } from "react";
-import { ID_ATTR, type UIResponse, type UIRequest } from "@/src/utils/shared";
+import {
+  ID_ATTR,
+  type UIResponse,
+  type UIRequest,
+  sendToBg,
+} from "@/src/utils/shared";
 import Arrow from "./arrow/Arrow";
 
 export default function ClickerApp() {
   const [pos, setPos] = useState<{ x: number; y: number }>({ x: 10, y: 10 });
-  const [thought, setThought] = useState<string | null>(
-    "Im thinking a sentence full now. Im thinking a sentence full now. Im thinking a sentence full now",
-  );
+  const [thinking, setThinking] = useState(false);
+  const [thought, setThought] = useState<string | null>(null);
 
   const findEl = (id: number): HTMLElement | null => {
     const el = document.querySelector(`[${ID_ATTR}="${id}"]`);
@@ -37,6 +41,11 @@ export default function ClickerApp() {
       });
 
       switch (req.type) {
+        case "UPDATE_THINKING": {
+          setThinking(req.isThinking);
+          send(ok());
+          break;
+        }
         case "SHOW_THOUGHT": {
           setThought(req.text);
           send(ok());
@@ -95,7 +104,7 @@ export default function ClickerApp() {
 
   return (
     <div
-      className="fixed z-[2147483647] pointer-events-none "
+      className="fixed z-[2147483647] "
       style={{
         left: `${pos.x}px`,
         top: `${pos.y}px`,
@@ -104,9 +113,20 @@ export default function ClickerApp() {
       <div className="flex gap-2">
         <Arrow />
         {thought && (
-          <p className="mt-4 bg-primary opacity-90 py-1 px-2 rounded-r-2xl rounded-b-2xl text-white text-sm max-w-[400px]">
-            {thought}
-          </p>
+          <div className="mt-4 flex gap-3 shadow-lg bg-primary py-1 px-3 rounded-l-2xl rounded-r-2xl text-white text-sm">
+            <p className=" max-w-[400px]">{thought}</p>
+            {thinking && (
+              <button
+                className="cursor-pointer"
+                onClick={async () => {
+                  await sendToBg({ type: "STOP" });
+                }}
+                title="Stop Agent"
+              >
+                <div className="w-3 h-3 bg-white rounded-sm"></div>
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
