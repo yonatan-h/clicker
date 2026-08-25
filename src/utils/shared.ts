@@ -3,8 +3,8 @@ import { browser } from "wxt/browser";
 export const ID_ATTR = "data-clicker4jf8-id";
 
 export type AgentUIState = {
-
-   state: 'running' | 'finished' | 'not-started';
+  goal: string;
+  state: "running" | "finished" | "not-started";
   targetId: number | null;
   isThinking: boolean;
   thought: string | null;
@@ -20,7 +20,10 @@ export type UIResponse = { message: string; isError: boolean };
 export type BGRequest =
   | {
       type: "START";
-      goal: string;
+      text: string;
+    }
+  | {
+      type: "UPDATE_API_KEY";
       apiKey: string;
     }
   | {

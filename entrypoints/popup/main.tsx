@@ -4,7 +4,6 @@ import React, { useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import {
   getApiKey,
-  getGoal,
 } from "@/src/utils/storage";
 import { type BGRequest, type BGResponse, sendToBg } from "@/src/utils/shared";
 
@@ -12,34 +11,28 @@ console.log("here");
 
 export default function App() {
   const [apiKey, setApiKey] = useState("");
-  const [goal, setGoal] = useState("");
   const [isStarting, setIsStarting] = useState(false);
 
   useEffect(() => {
-    Promise.all([getApiKey(), getGoal()]).then(([key, g]) => {
+    getApiKey().then((key) => {
       if (key) setApiKey(key);
-      if (g) setGoal(g);
     });
   }, []);
   
 
 
-  const handleStart = async () => {
+  const handleSave = async () => {
     const trimmedKey = apiKey.trim();
-    const trimmedGoal = goal.trim();
 
     if (!trimmedKey) {
       alert("Please enter your Gemini API Key first.");
       return;
     }
-    if (!trimmedGoal) {
-      alert("Please enter a goal.");
-      return;
-    }
 
     setIsStarting(true);
-    const req: BGRequest = { type: "START", goal: trimmedGoal, apiKey: trimmedKey };
+    const req: BGRequest = { type: "UPDATE_API_KEY", apiKey: trimmedKey };
     await sendToBg(req);
+    setIsStarting(false);
   };
 
   const handleSnapshot = async () => {
@@ -62,24 +55,13 @@ export default function App() {
         />
       </div>
 
-      <div className="flex flex-col gap-1">
-        <label className="text-xl font-bold text-gray-500 ml-2">Goal</label>
-        <textarea
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          rows={5}
-          placeholder="What should I do?"
-          className="bg-gray-50 border-1 border-gray-400 rounded-2xl p-2"
-        />
-      </div>
-
       <div className="flex flex-col gap-3 mt-2">
         <button
-          onClick={handleStart}
+          onClick={handleSave}
           disabled={isStarting}
           className="bg-primary text-white font-bold p-2 rounded-full "
         >
-          {isStarting ? "Starting..." : "Start"}
+          {isStarting ? "Saving..." : "Save API Key"}
         </button>
         <button
           onClick={handleSnapshot}

@@ -1,5 +1,5 @@
 import { browser } from "wxt/browser";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   ID_ATTR,
   type UIResponse,
@@ -7,16 +7,47 @@ import {
   type AgentUIState,
   sendToBg,
 } from "@/src/utils/shared";
+import { getApiKey, getGoal, storeGoal } from "@/src/utils/storage";
 import Arrow from "./arrow/Arrow";
 
 export default function ClickerApp() {
   const [uiState, setUiState] = useState<AgentUIState>({
+    goal: "",
     targetId: null,
-    state: 'not-started',
+    state: "not-started",
     isThinking: false,
     thought: null,
   });
   const [pos, setPos] = useState<{ x: number; y: number }>({ x: 10, y: 10 });
+  const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      // Add 2px to account for the top and bottom borders, otherwise it overflows by 2px and triggers the scrollbar
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight + 2}px`;
+    }
+  }, [input, uiState.state]);
+
+  const handleStart = async () => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      alert("Please enter a goal.");
+      return;
+    }
+
+    const key = await getApiKey();
+    if (!key) {
+      alert(
+        "Please open the extension popup and set your Gemini API Key first.",
+      );
+      return;
+    }
+
+    await storeGoal(trimmed);
+    await sendToBg({ type: "START", text: trimmed });
+  };
 
   const findEl = (id: number): HTMLElement | null => {
     const el = document.querySelector(`[${ID_ATTR}="${id}"]`);
@@ -37,11 +68,6 @@ export default function ClickerApp() {
           return;
         }
       }
-      
-      setPos({
-        x: window.innerWidth / 4,
-        y: window.innerHeight / 4,
-      });
     };
 
     updatePos();
@@ -53,6 +79,7 @@ export default function ClickerApp() {
     sendToBg({ type: "GET_STATE" }).then((res) => {
       if (res.isOk && res.state) {
         setUiState(res.state);
+        setInput(res.state.goal);
       }
     });
 
@@ -116,41 +143,66 @@ export default function ClickerApp() {
     return () => browser.runtime.onMessage.removeListener(listener);
   }, []);
 
+  const evalPos = uiState.targetId
+    ? pos
+    : {
+        x: window.innerWidth / 4,
+        y: window.innerHeight / 4,
+      };
+
   return (
     <div
-      className="fixed z-[2147483647] pointer-events-none transition-all duration-300 ease-out"
+      className="fixed z-[2147483647] pointer-events-none transition-all duration-300 ease-out flex gap-1"
       style={{
-        left: `${pos.x}px`,
-        top: `${pos.y}px`,
+        left: `${evalPos.x}px`,
+        top: `${evalPos.y}px`,
       }}
     >
-      <div className="flex gap-2">
-        <Arrow />
-        {(uiState.thought || uiState.isThinking) && (
-          <div className=" flex gap-3 shadow-lg bg-primary py-1 px-3 rounded-l-2xl rounded-r-2xl text-white text-sm w-[300px]">
-            <div className="flex-1">
-              {uiState.thought && (
-                <p className=" ">{uiState.thought}</p>
-              )}
+      <Arrow />
+      <div className="mt-3 bg-primary rounded-b-2xl rounded-2xl w-[300px] text-white border-white ">
+        <div className="flex gap-2">
+          {(uiState.thought || uiState.isThinking) && (
+            <div className="flex-1 p-2">
+              {uiState.thought && <p className="text-xs">{uiState.thought}</p>}
+
               {uiState.isThinking && (
-                <div className="flex items-center gap-1  h-3">
+                <div className="flex items-center gap-1   h-3">
                   <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
                   <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
                   <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce"></div>
                 </div>
               )}
             </div>
-            {uiState.state === 'running' && (
-              <button
-                className="cursor-pointer pointer-events-auto"
-                onClick={async () => {
-                  await sendToBg({ type: "STOP" });
-                }}
-                title="Stop Agent"
-              >
-                <div className="w-3 h-3 bg-white rounded-sm"></div>
-              </button>
-            )}
+          )}
+          {uiState.state === "running" && (
+            <button
+              className="cursor-pointer pointer-events-auto"
+              onClick={async () => {
+                await sendToBg({ type: "STOP" });
+              }}
+              title="Stop Agent"
+            >
+              <div className="w-4 h-4 mx-2 bg-white rounded-sm"></div>
+            </button>
+          )}
+        </div>
+
+        {uiState.state !== "running" && (
+          <div className="relative pointer-events-auto">
+            <textarea
+              ref={textareaRef}
+              className="block bg-white/10 border-white/20 border w-full p-2 pr-12 rounded-2xl shadow-lg text-sm  resize-none focus:outline-none max-h-40 overflow-y-auto"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder=" What should I do?"
+              rows={1}
+            />
+            <button
+              className="absolute right-2 bottom-2 bg-white text-primary font-bold p-1 px-3 text-xs rounded-2xl shadow"
+              onClick={handleStart}
+            >
+              Go
+            </button>
           </div>
         )}
       </div>

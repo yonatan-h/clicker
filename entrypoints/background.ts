@@ -1,7 +1,7 @@
 import { browser } from "wxt/browser";
 import { takeSnapshot } from "@/src/snapshot/snapshot";
 import { Agent } from "../src/harness/Agent";
-import { storeApiKey, storeGoal } from "../src/utils/storage";
+import { storeApiKey, storeGoal, getApiKey } from "../src/utils/storage";
 import type { BGRequest, BGResponse } from "@/src/utils/shared";
 
 const getCurTabId = async (): Promise<number | null> => {
@@ -13,7 +13,18 @@ const getCurTabId = async (): Promise<number | null> => {
 
 let activeAgent: Agent | null = null;
 
+const initAgent = async () => {
+  const key = await getApiKey();
+  if (key) {
+    activeAgent = new Agent(key);
+  } else {
+    activeAgent = null;
+  }
+};
+
 export default defineBackground(() => {
+  initAgent();
+
   browser.runtime.onMessage.addListener(
     async (message: any, _sender, _send) => {
       const req = message as BGRequest;
@@ -23,34 +34,28 @@ export default defineBackground(() => {
         _send(res);
       };
 
-      if (req.type === "START") {
+      if (req.type === "UPDATE_API_KEY") {
         await storeApiKey(req.apiKey);
-        await storeGoal(req.goal);
-
-        const id = await getCurTabId();
-        if (id !== null && activeAgent === null) {
-          activeAgent = new Agent(id, req.apiKey, req.goal);
-          await activeAgent.runGameLoop();
-        } else {
-          console.error("No active tab found");
-        }
-        sendResponse({ isOk: true, message: "Started" } as BGResponse);
+        await initAgent();
+        sendResponse({ isOk: true, message: "API Key updated" });
       } else if (req.type === "CAPTURE_SNAPSHOT") {
         const id = await getCurTabId();
         if (id !== null) {
           await takeSnapshot(id);
         }
-        sendResponse({ isOk: true, message: "Snapshot started" } as BGResponse);
+        sendResponse({ isOk: true, message: "Snapshot started" });
       } else {
         if (activeAgent) {
+          if (_sender.tab?.id) {
+            activeAgent.tabId = _sender.tab.id;
+          }
           const res = activeAgent.processEvent(req);
-          console.log("🚀 ~ ---------res:", res);
-          sendResponse(res as BGResponse);
+          sendResponse(res);
         } else {
           sendResponse({
             isOk: false,
             message: "Req to bg not handled",
-          } as BGResponse);
+          });
         }
       }
       return true;

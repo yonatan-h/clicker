@@ -9,6 +9,7 @@ import {
   type AgentUIState,
   sendToUI,
 } from "../utils/shared";
+import { getGoal } from "../utils/storage";
 
 type HistoryItem = { role: "USER" | "MODEL"; parts: { text: string }[] };
 type ToolCall =
@@ -17,8 +18,6 @@ type ToolCall =
   | { type: "navigate"; url: string; thought: string }
   | { type: "ask_user"; question: string }
   | { type: "done"; result: string };
-
-type ToolCallResponse = { message: string; isError: boolean };
 
 type RateLimitInfo = {
   reqPerMin: number;
@@ -42,17 +41,20 @@ export class Agent {
     return text.match(/[\w]+|[^\s\w]/g)?.length || 0;
   }
 
-  private tabId: number;
+  public tabId: number | null = null;
   private apiKey: string;
-  private goal: string;
+  public goal: string = "";
 
-  constructor(tabId: number, apiKey: string, goal: string) {
-    this.tabId = tabId;
+  constructor(apiKey: string) {
     this.apiKey = apiKey;
-    this.goal = goal;
+    getGoal().then((goal) => {
+      this.goal = goal || "";
+      this.syncUI();
+    });
   }
 
   public uiState: AgentUIState = {
+    goal: "",
     targetId: null,
     state: "not-started",
     isThinking: false,
@@ -60,11 +62,13 @@ export class Agent {
   };
 
   public async syncUI(partial?: Partial<AgentUIState>) {
+    if (this.tabId === null) return;
     if (partial) {
       this.uiState = {
         ...this.uiState,
         ...partial,
         state: this.state,
+        goal: this.goal,
       };
     }
     await sendToUI(this.tabId, { type: "SYNC_STATE", state: this.uiState });
@@ -72,7 +76,7 @@ export class Agent {
 
   public stop() {
     this.state = "finished";
-    this.syncUI({ state: "finished", isThinking: false, thought: "Stopped" });
+    this.syncUI({ state: "finished", isThinking: false, thought: "Stopped", targetId:null });
   }
   public processEvent(event: BGRequest): BGResponse {
     if (event.type === "STOP") {
@@ -84,27 +88,40 @@ export class Agent {
       return { isOk: true, message: "State retrieved", state: this.uiState };
     }
 
+    if (event.type === "START") {
+      if (this.state === "not-started") {
+        this.goal = event.text;
+        this.runGameLoop();
+        return { isOk: true, message: "Started" };
+      } else if (this.state === "finished") {
+        this.history.push({ role: "USER", parts: [{ text: event.text }] });
+        this.runGameLoop();
+        return { isOk: true, message: "Started" };
+      }
+      return { isOk: false, message: "Cannot start while running" };
+    }
+
     return { isOk: false, message: `Unknown event type ${event.type}` };
   }
 
   async fakeCallModel(
     systemPrompt: string,
     currentPrompt: string,
-  ): Promise<string | null> {
+  ): Promise<{ response: string | null; sleepMs: number }> {
     //commentable
-    await this.sleep(10000);
+    await this.sleep(4000);
     const dummyCall: ToolCall = {
       type: "click",
       thought: "clicking anywhere",
       id: -1,
     };
-    return JSON.stringify(dummyCall);
+    return { response: JSON.stringify(dummyCall), sleepMs: 0 };
   }
 
   async callModel(
     systemPrompt: string,
     currentPrompt: string,
-  ): Promise<string | null> {
+  ): Promise<{ response: string | null; sleepMs: number }> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=${encodeURIComponent(this.apiKey)}`;
 
     const requestContents = [
@@ -112,10 +129,10 @@ export class Agent {
       { role: "USER", parts: [{ text: currentPrompt }] },
     ];
 
+    const info = this.getActivityInfo(systemPrompt, currentPrompt);
     this.tokenLog.push({
       timestamp: Date.now(),
-      tokens: this.getActivityInfo(systemPrompt, currentPrompt).payloadInfo
-        .totalTokens,
+      tokens: info.payloadInfo.totalTokens,
     });
 
     try {
@@ -132,7 +149,26 @@ export class Agent {
       if (!res.ok) {
         const errText = await res.text();
         console.warn(`API Error (${res.status}):`, errText);
-        return null;
+
+        if (res.status === 429) {
+          let sleepMs = 30000; // Default to 30 seconds if we can't parse it
+          try {
+            const errJson = JSON.parse(errText);
+            const details = errJson.error?.details || [];
+            const retryInfo = details.find((d: any) => d?.retryDelay);
+            if (retryInfo && typeof retryInfo.retryDelay === "string") {
+              const seconds = parseFloat(retryInfo.retryDelay);
+              if (!isNaN(seconds)) {
+                sleepMs = (seconds * 1000) + 1000; 
+              }
+            }
+          } catch (e) {
+          }
+
+          return { response: null, sleepMs };
+        }
+
+        return { response: null, sleepMs: 0 };
       }
 
       const data = await res.json();
@@ -140,10 +176,10 @@ export class Agent {
       const finalPart =
         parts.find((p: any) => !p.thought) || parts[parts.length - 1];
 
-      return finalPart.text;
+      return { response: finalPart.text, sleepMs: 0 };
     } catch (err) {
       console.error("Network error:", err);
-      return null;
+      return { response: null, sleepMs: 0 };
     }
   }
 
@@ -154,7 +190,14 @@ export class Agent {
       }
     | { success: false; error: string } {
     try {
-      const parsed = JSON.parse(snippet);
+      let cleanSnippet = snippet;
+      const startIndex = snippet.indexOf("{");
+      const endIndex = snippet.lastIndexOf("}");
+      if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+        cleanSnippet = snippet.substring(startIndex, endIndex + 1);
+      }
+      
+      const parsed = JSON.parse(cleanSnippet);
       if (!parsed || typeof parsed !== "object" || !parsed.type) {
         return {
           success: false,
@@ -196,7 +239,7 @@ export class Agent {
   }
 
   async getUISnapshot(): Promise<SnapshotResult> {
-    const result = await takeSnapshot(this.tabId);
+    const result = await takeSnapshot(this.tabId!);
     return result;
   }
 
@@ -215,6 +258,7 @@ Rules:
 3. Do NOT return the "done" action until you have visually confirmed the result on the page. Your final "thought" must state concrete findings.
 4. After typing into a search field or form, look for a submit button or wait to see if the page updates automatically.
 5. If you need to see more detail inside a container, or if the snapshot is truncated, use the "view" action.
+6. Keep your "thought" field strictly to 1 or 2 short, concise sentences.
 </instruction>
 
 <tools>
@@ -374,10 +418,19 @@ Respond ONLY with a JSON object matching one of the tools.`;
 
       if (this.state !== "running") break;
       this.syncUI({ isThinking: true });
-      const raw = await this.callModel(systemPrompt, turnMessage);
-      // const raw = await this.fakeCallModel(systemPrompt, turnMessage);
+      const modelOut = await this.callModel(systemPrompt, turnMessage);
+      // const modelOut = await this.fakeCallModel(systemPrompt, turnMessage);
       this.syncUI({ isThinking: false });
       if (this.state !== "running") break;
+
+      if (modelOut.sleepMs > 0) {
+        this.syncUI({ thought: `Rate limited. Waiting ${Math.ceil(modelOut.sleepMs / 1000)}s...` });
+        await this.sleep(modelOut.sleepMs);
+        if (this.state !== "running") break;
+        continue;
+      }
+
+      const raw = modelOut.response;
       if (!raw) {
         previousActionStatus = "API Error: No response or network failure";
         await this.sleep(2000);
@@ -407,7 +460,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
       if (action.type === "click") {
         this.syncUI({ targetId: action.id });
         await this.sleep(2000);
-        uiRes = await sendToUI(this.tabId, {
+        uiRes = await sendToUI(this.tabId!, {
           type: "DO_CLICK",
           id: action.id,
           state: this.uiState,
@@ -415,7 +468,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
       } else if (action.type === "type") {
         this.syncUI({ targetId: action.id });
         await this.sleep(2000);
-        uiRes = await sendToUI(this.tabId, {
+        uiRes = await sendToUI(this.tabId!, {
           type: "DO_TYPE",
           id: action.id,
           text: action.text,
@@ -444,6 +497,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
 
       if (uiRes.isError) {
         previousActionStatus = `Error - ${uiRes.message}`;
+        this.syncUI({targetId:null})
       } else {
         previousActionStatus = uiRes.message;
       }
