@@ -121,7 +121,10 @@ export default function ClickerApp() {
         case "DO_TYPE": {
           const el = findEl(req.id);
           if (!el) return send(elNotFound(req.id));
-          if (!(el instanceof HTMLInputElement)) {
+          if (
+            !(el instanceof HTMLInputElement) &&
+            !(el instanceof HTMLTextAreaElement)
+          ) {
             return send({
               message: `Element with id=${req.id} is not an input, but an ${el.tagName}`,
               isError: true,
@@ -152,59 +155,82 @@ export default function ClickerApp() {
 
   return (
     <div
-      className="fixed z-[2147483647] pointer-events-none transition-all duration-300 ease-out flex gap-1"
+      className="fixed z-[2147483647] transition-all duration-300 ease-out flex gap-1"
       style={{
         left: `${evalPos.x}px`,
         top: `${evalPos.y}px`,
       }}
     >
       <Arrow />
-      <div className="mt-3 bg-primary rounded-b-2xl rounded-2xl w-[300px] text-white border-white ">
-        <div className="flex gap-2">
-          {(uiState.thought || uiState.isThinking) && (
-            <div className="flex-1 p-2">
-              {uiState.thought && <p className="text-xs">{uiState.thought}</p>}
 
-              {uiState.isThinking && (
-                <div className="flex items-center gap-1   h-3">
-                  <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                  <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                  <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce"></div>
-                </div>
-              )}
+      <div className="flex flex-col">
+        <div className="flex justify-end">
+          <div className="flex  gap-2">
+            <button>min</button>
+            <button>max</button>
+          </div>
+        </div>
+        <div className="mt-3 bg-primary rounded-b-2xl rounded-2xl w-[300px] text-white border-white ">
+          <div className="flex gap-2">
+            {(uiState.thought || uiState.isThinking) && (
+              <div className="flex-1 p-2">
+                {uiState.thought && (
+                  <p className="text-xs">{uiState.thought}</p>
+                )}
+
+                {uiState.isThinking && (
+                  <div className="flex items-center gap-1   h-3">
+                    <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                    <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                    <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce"></div>
+                  </div>
+                )}
+              </div>
+            )}
+            {uiState.state === "running" && (
+              <button
+                className="cursor-pointer pointer-events-auto"
+                onClick={async () => {
+                  await sendToBg({ type: "STOP" });
+                }}
+                title="Stop Agent"
+              >
+                <div className="w-4 h-4 mx-2 bg-white rounded-sm"></div>
+              </button>
+            )}
+            {uiState.state === "finished" && (
+              <button
+                className=" flex items-center opacity-70 text-xs px-2 hover:opacity-100"
+                onClick={async () => {
+                  await sendToBg({ type: "RESET" });
+                  setInput("");
+                }}
+                title="Reset Context"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+
+          {uiState.state !== "running" && (
+            <div className="relative pointer-events-auto">
+              <textarea
+                ref={textareaRef}
+                className="block bg-white/10 border-white/20 border w-full p-2 pr-12 rounded-2xl shadow-lg text-sm  resize-none focus:outline-none max-h-40 overflow-y-auto"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder=" What should I do?"
+                rows={1}
+              />
+              <button
+                className="absolute right-2 bottom-2 bg-white text-primary font-bold p-1 px-3 text-xs rounded-2xl shadow"
+                onClick={handleStart}
+              >
+                Go
+              </button>
             </div>
           )}
-          {uiState.state === "running" && (
-            <button
-              className="cursor-pointer pointer-events-auto"
-              onClick={async () => {
-                await sendToBg({ type: "STOP" });
-              }}
-              title="Stop Agent"
-            >
-              <div className="w-4 h-4 mx-2 bg-white rounded-sm"></div>
-            </button>
-          )}
         </div>
-
-        {uiState.state !== "running" && (
-          <div className="relative pointer-events-auto">
-            <textarea
-              ref={textareaRef}
-              className="block bg-white/10 border-white/20 border w-full p-2 pr-12 rounded-2xl shadow-lg text-sm  resize-none focus:outline-none max-h-40 overflow-y-auto"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder=" What should I do?"
-              rows={1}
-            />
-            <button
-              className="absolute right-2 bottom-2 bg-white text-primary font-bold p-1 px-3 text-xs rounded-2xl shadow"
-              onClick={handleStart}
-            >
-              Go
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

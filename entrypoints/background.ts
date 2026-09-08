@@ -44,6 +44,9 @@ export default defineBackground(() => {
           await takeSnapshot(id);
         }
         sendResponse({ isOk: true, message: "Snapshot started" });
+      } else if (req.type === "RESET") {
+        await initAgent();
+        sendResponse({ isOk: true, message: "Agent reset" });
       } else {
         if (activeAgent) {
           if (_sender.tab?.id) {

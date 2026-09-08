@@ -34,6 +34,9 @@ export type BGRequest =
     }
   | {
       type: "GET_STATE";
+    }
+  | {
+      type: "RESET";
     };
 
 export type BGResponse = {

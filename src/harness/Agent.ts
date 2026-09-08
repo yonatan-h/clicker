@@ -4,8 +4,6 @@ import {
   type BGRequest,
   type BGResponse,
   type SnapshotResult,
-  type UIRequest,
-  type UIResponse,
   type AgentUIState,
   sendToUI,
 } from "../utils/shared";
@@ -18,6 +16,10 @@ type ToolCall =
   | { type: "navigate"; url: string; thought: string }
   | { type: "ask_user"; question: string }
   | { type: "done"; result: string };
+
+type CallModelResult =
+  | { success: true; response: string; sleepMs: number }
+  | { success: false; error: string; sleepMs: number };
 
 type RateLimitInfo = {
   reqPerMin: number;
@@ -74,9 +76,14 @@ export class Agent {
     await sendToUI(this.tabId, { type: "SYNC_STATE", state: this.uiState });
   }
 
-  public stop() {
+  public stop(customThought?: string) {
     this.state = "finished";
-    this.syncUI({ state: "finished", isThinking: false, thought: "Stopped", targetId:null });
+    this.syncUI({
+      state: "finished",
+      isThinking: false,
+      thought: customThought || "Stopped",
+      targetId: null,
+    });
   }
   public processEvent(event: BGRequest): BGResponse {
     if (event.type === "STOP") {
@@ -107,7 +114,7 @@ export class Agent {
   async fakeCallModel(
     systemPrompt: string,
     currentPrompt: string,
-  ): Promise<{ response: string | null; sleepMs: number }> {
+  ): Promise<CallModelResult> {
     //commentable
     await this.sleep(4000);
     const dummyCall: ToolCall = {
@@ -115,13 +122,13 @@ export class Agent {
       thought: "clicking anywhere",
       id: -1,
     };
-    return { response: JSON.stringify(dummyCall), sleepMs: 0 };
+    return { success: true, response: JSON.stringify(dummyCall), sleepMs: 0 };
   }
 
   async callModel(
     systemPrompt: string,
     currentPrompt: string,
-  ): Promise<{ response: string | null; sleepMs: number }> {
+  ): Promise<CallModelResult> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=${encodeURIComponent(this.apiKey)}`;
 
     const requestContents = [
@@ -159,16 +166,23 @@ export class Agent {
             if (retryInfo && typeof retryInfo.retryDelay === "string") {
               const seconds = parseFloat(retryInfo.retryDelay);
               if (!isNaN(seconds)) {
-                sleepMs = (seconds * 1000) + 1000; 
+                sleepMs = seconds * 1000 + 1000;
               }
             }
-          } catch (e) {
-          }
+          } catch (e) {}
 
-          return { response: null, sleepMs };
+          return {
+            success: false,
+            error: "Rate limit exceeded (429)",
+            sleepMs,
+          };
         }
 
-        return { response: null, sleepMs: 0 };
+        return {
+          success: false,
+          error: `API Error (${res.status}): ${errText}`,
+          sleepMs: 0,
+        };
       }
 
       const data = await res.json();
@@ -176,10 +190,14 @@ export class Agent {
       const finalPart =
         parts.find((p: any) => !p.thought) || parts[parts.length - 1];
 
-      return { response: finalPart.text, sleepMs: 0 };
-    } catch (err) {
+      return { success: true, response: finalPart.text, sleepMs: 0 };
+    } catch (err: any) {
       console.error("Network error:", err);
-      return { response: null, sleepMs: 0 };
+      return {
+        success: false,
+        error: `Network error: ${err.message}`,
+        sleepMs: 0,
+      };
     }
   }
 
@@ -196,7 +214,7 @@ export class Agent {
       if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
         cleanSnippet = snippet.substring(startIndex, endIndex + 1);
       }
-      
+
       const parsed = JSON.parse(cleanSnippet);
       if (!parsed || typeof parsed !== "object" || !parsed.type) {
         return {
@@ -379,7 +397,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
     }
 
     this.state = "running";
-    this.syncUI({ thought: `Goal: ${this.goal}`, targetId: null });
+    this.syncUI({ thought: `${this.goal}`, targetId: null });
     await this.sleep(1000);
 
     let previousActionStatus = "None (first step)";
@@ -397,10 +415,10 @@ Respond ONLY with a JSON object matching one of the tools.`;
       }
 
       const { systemPrompt, turnMessage } = this.buildPrompt({
-        pageTitle: snapResult?.pageTitle || "<unknown>",
-        pageUrl: snapResult?.pageUrl || "<unknown>",
+        pageTitle: snapResult.pageTitle,
+        pageUrl: snapResult.pageUrl,
         previousActionStatus,
-        snapshot: snapResult.snapshot || "Could not get snapshot",
+        snapshot: snapResult.snapshot,
       });
 
       const info = this.getActivityInfo(systemPrompt, turnMessage);
@@ -409,8 +427,13 @@ Respond ONLY with a JSON object matching one of the tools.`;
         info.rateLimitUsage.tokensThisMin + info.payloadInfo.totalTokens >=
           this.rateLimit.tokenPerMin
       ) {
-        console.warn("[Rate Limit] Nearing limits. Sleeping 1s...");
+        console.warn("[Rate Limit] Nearing limits. Sleeping 1s...", info.rateLimitUsage);
+        this.syncUI({ thought: "Rate limited, waiting 1s", isThinking: true });
         await this.sleep(1000);
+        this.syncUI({
+          thought: "Finished waiting, resuming...",
+          isThinking: false,
+        });
         continue;
       }
 
@@ -423,19 +446,23 @@ Respond ONLY with a JSON object matching one of the tools.`;
       this.syncUI({ isThinking: false });
       if (this.state !== "running") break;
 
-      if (modelOut.sleepMs > 0) {
-        this.syncUI({ thought: `Rate limited. Waiting ${Math.ceil(modelOut.sleepMs / 1000)}s...` });
-        await this.sleep(modelOut.sleepMs);
-        if (this.state !== "running") break;
-        continue;
+      if (!modelOut.success) {
+        if (modelOut.sleepMs > 0) {
+          this.syncUI({
+            thought: `Rate limited. Waiting ${Math.ceil(modelOut.sleepMs / 1000)}s...`,
+          });
+          await this.sleep(modelOut.sleepMs);
+          if (this.state !== "running") break;
+          continue;
+        } else {
+          this.syncUI({ thought: `API Error: ${modelOut.error}` });
+          previousActionStatus = `API Error: ${modelOut.error}`;
+          await this.sleep(3000);
+          continue;
+        }
       }
 
       const raw = modelOut.response;
-      if (!raw) {
-        previousActionStatus = "API Error: No response or network failure";
-        await this.sleep(2000);
-        continue;
-      }
 
       const extractResult = this.extractToolCall(raw);
       if (!extractResult.success) {
@@ -475,14 +502,20 @@ Respond ONLY with a JSON object matching one of the tools.`;
           state: this.uiState,
         });
       } else if (action.type === "navigate") {
-        uiRes = { message: "Navigate is not implemented", isError: true };
+        this.syncUI({ targetId: null });
+        try {
+          await browser.tabs.update(this.tabId!, { url: action.url });
+          uiRes = { message: `Navigated to ${action.url}`, isError: false };
+          await this.sleep(4000); // Give the page time to load
+        } catch (e: any) {
+          uiRes = { message: `Navigation failed: ${e.message}`, isError: true };
+        }
       } else if (action.type === "ask_user") {
-        uiRes = { message: "Ask User is not implemented", isError: true };
+        uiRes = { message: "asking user", isError: false };
+        this.stop(action.question);
       } else if (action.type === "done") {
-        console.log("Agent finished task:", action.result);
-        this.stop();
-        this.syncUI({ targetId: null, thought: action.result });
-        break;
+        uiRes = { message: "finished", isError: false };
+        this.stop(action.result);
       } else {
         uiRes = { message: "Unknown action type", isError: true };
       }
@@ -497,7 +530,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
 
       if (uiRes.isError) {
         previousActionStatus = `Error - ${uiRes.message}`;
-        this.syncUI({targetId:null})
+        this.syncUI({ targetId: null, thought: previousActionStatus });
       } else {
         previousActionStatus = uiRes.message;
       }
