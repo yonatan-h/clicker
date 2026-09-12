@@ -4,10 +4,10 @@ export const ID_ATTR = "data-clicker4jf8-id";
 
 export type AgentUIState = {
   goal: string;
-  state: "running" | "finished" | "not-started";
   targetId: number | null;
   isThinking: boolean;
-  thought: string | null;
+  isRunning: boolean;
+  thoughts: string[];
 };
 
 export type UIRequest =

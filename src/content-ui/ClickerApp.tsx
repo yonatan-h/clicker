@@ -9,26 +9,67 @@ import {
 } from "@/src/utils/shared";
 import { getApiKey, getGoal, storeGoal } from "@/src/utils/storage";
 import Arrow from "./arrow/Arrow";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { ArrowRight, RotateCcw, Square, Loader2 } from "lucide-react";
 
 export default function ClickerApp() {
   const [uiState, setUiState] = useState<AgentUIState>({
     goal: "",
     targetId: null,
-    state: "not-started",
     isThinking: false,
-    thought: null,
+    isRunning: false,
+    thoughts: [],
   });
-  const [pos, setPos] = useState<{ x: number; y: number }>({ x: 10, y: 10 });
-  const [input, setInput] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
+    x: typeof window !== "undefined" ? window.innerWidth / 4 : 50,
+    y: typeof window !== "undefined" ? window.innerHeight / 4 : 50,
+  }));
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef<{
+    startX: number;
+    startY: number;
+    posX: number;
+    posY: number;
+  }>({
+    startX: 0,
+    startY: 0,
+    posX: 0,
+    posY: 0,
+  });
 
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      // Add 2px to account for the top and bottom borders, otherwise it overflows by 2px and triggers the scrollbar
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight + 2}px`;
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsDragging(true);
+    dragStartRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      posX: pos.x,
+      posY: pos.y,
+    };
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging) return;
+    const dx = e.clientX - dragStartRef.current.startX;
+    const dy = e.clientY - dragStartRef.current.startY;
+    setPos({
+      x: dragStartRef.current.posX + dx,
+      y: dragStartRef.current.posY + dy,
+    });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isDragging) {
+      setIsDragging(false);
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
     }
-  }, [input, uiState.state]);
+  };
+
+  const [input, setInput] = useState("");
 
   const handleStart = async () => {
     const trimmed = input.trim();
@@ -146,89 +187,141 @@ export default function ClickerApp() {
     return () => browser.runtime.onMessage.removeListener(listener);
   }, []);
 
-  const evalPos = uiState.targetId
-    ? pos
-    : {
-        x: window.innerWidth / 4,
-        y: window.innerHeight / 4,
-      };
+  const showSpinner = uiState.isThinking;
+  const showStop = uiState.isRunning;
+  const showThought = uiState.thoughts.length > 0;
+  const showActivityStatus = uiState.isRunning;
+  const showInput = !showActivityStatus;
+  const showIdleBar = !uiState.isRunning;
+  const showResetButton = !uiState.isRunning && uiState.thoughts.length > 0;
 
   return (
     <div
-      className="fixed z-[2147483647] transition-all duration-300 ease-out flex gap-1"
+      className={`fixed z-[2147483647] flex gap-1 text-foreground text-sm ${
+        isDragging
+          ? "transition-none select-none"
+          : "transition-all duration-300 ease-out"
+      }`}
       style={{
-        left: `${evalPos.x}px`,
-        top: `${evalPos.y}px`,
+        left: `${pos.x}px`,
+        top: `${pos.y}px`,
       }}
     >
       <Arrow />
 
-      <div className="flex flex-col">
-        <div className="flex justify-end">
-          <div className="flex  gap-2">
-            <button>min</button>
-            <button>max</button>
-          </div>
-        </div>
-        <div className="mt-3 bg-primary rounded-b-2xl rounded-2xl w-[300px] text-white border-white ">
-          <div className="flex gap-2">
-            {(uiState.thought || uiState.isThinking) && (
-              <div className="flex-1 p-2">
-                {uiState.thought && (
-                  <p className="text-xs">{uiState.thought}</p>
+      <div className="flex flex-col mt-3">
+        <div className=" rounded-b rounded w-[300px]  bg-primary ">
+          {showActivityStatus && (
+            <div className="flex items-center justify-between gap-1 px-2 py-1 ">
+              <div
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerUp}
+                title="Drag to move"
+                className="flex items-center gap-2 min-w-0 flex-1 cursor-grab active:cursor-grabbing select-none"
+              >
+                {showSpinner && (
+                  <Loader2 className="w-3 h-3 shrink-0 animate-spin text-white/90" />
                 )}
 
-                {uiState.isThinking && (
-                  <div className="flex items-center gap-1   h-3">
-                    <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                    <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                    <div className="w-1 h-1 bg-white/80 rounded-full animate-bounce"></div>
-                  </div>
+                {showThought && (
+                  <span className="text-xs text-white/90">
+                    {uiState.thoughts[uiState.thoughts.length - 1]}
+                  </span>
                 )}
               </div>
-            )}
-            {uiState.state === "running" && (
-              <button
-                className="cursor-pointer pointer-events-auto"
-                onClick={async () => {
-                  await sendToBg({ type: "STOP" });
-                }}
-                title="Stop Agent"
-              >
-                <div className="w-4 h-4 mx-2 bg-white rounded-sm"></div>
-              </button>
-            )}
-            {uiState.state === "finished" && (
-              <button
-                className=" flex items-center opacity-70 text-xs px-2 hover:opacity-100"
-                onClick={async () => {
-                  await sendToBg({ type: "RESET" });
-                  setInput("");
-                }}
-                title="Reset Context"
-              >
-                Reset
-              </button>
-            )}
-          </div>
 
-          {uiState.state !== "running" && (
-            <div className="relative pointer-events-auto">
-              <textarea
-                ref={textareaRef}
-                className="block bg-white/10 border-white/20 border w-full p-2 pr-12 rounded-2xl shadow-lg text-sm  resize-none focus:outline-none max-h-40 overflow-y-auto"
+              {showStop && (
+                <Button
+                  variant="secondary"
+                  size="icon-sm"
+                  className="shrink-0 rounded-full"
+                  type="button"
+                  onClick={async () => {
+                    await sendToBg({ type: "STOP" });
+                  }}
+                  title="Stop Agent"
+                >
+                  <Square className="size-3 fill-current" />
+                </Button>
+              )}
+            </div>
+          )}
+
+          {showIdleBar && (
+            <div className="flex items-center justify-between gap-1 border-white/10">
+              <div
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerUp}
+                title="Drag to move"
+                className="px-2 min-h-4 flex items-center text-xs text-white/90  flex-1 cursor-grab active:cursor-grabbing select-none"
+              >
+                {showThought && (
+                  <span>{uiState.thoughts[uiState.thoughts.length - 1]}</span>
+                )}
+              </div>
+              {showResetButton && (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={async () => {
+                    await sendToBg({ type: "RESET" });
+                    setInput("");
+                    setUiState((prev) => ({
+                      ...prev,
+                      isRunning: false,
+                      isThinking: false,
+                      thoughts: [],
+                      targetId: null,
+                    }));
+                  }}
+                  title="Reset Context"
+                  className="shrink-0 text-white/80 hover:text-white"
+                >
+                  <RotateCcw className="size-3" />
+                </Button>
+              )}
+            </div>
+          )}
+
+          {showInput && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleStart();
+              }}
+              className="relative"
+            >
+              <Textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder=" What should I do?"
-                rows={1}
+                placeholder="How can I help?"
+                className="min-h-8  pr-8 text-background resize-none bg-white/10 outline-none rounded border border-white/20"
+                onKeyDown={(e) => {
+                  if (
+                    e.key === "Enter" &&
+                    !e.shiftKey &&
+                    !e.ctrlKey &&
+                    !e.nativeEvent.isComposing
+                  ) {
+                    e.preventDefault();
+                    handleStart();
+                  }
+                }}
               />
-              <button
-                className="absolute right-2 bottom-2 bg-white text-primary font-bold p-1 px-3 text-xs rounded-2xl shadow"
-                onClick={handleStart}
+              <Button
+                variant="secondary"
+                size="icon-sm"
+                className="absolute right-1 bottom-1 rounded-full"
+                type="submit"
+                title="Send"
               >
-                Go
-              </button>
-            </div>
+                <ArrowRight className="size-3.5" />
+              </Button>
+            </form>
           )}
         </div>
       </div>

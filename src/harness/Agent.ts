@@ -31,7 +31,6 @@ type RateLimitInfo = {
 export class Agent {
   //todo: use xml tags to separate. background, instructions, tools
   private history: HistoryItem[] = [];
-  private state: AgentUIState["state"] = "not-started";
   private rateLimit: RateLimitInfo = {
     reqPerMin: 30,
     tokenPerMin: 16000,
@@ -58,18 +57,25 @@ export class Agent {
   public uiState: AgentUIState = {
     goal: "",
     targetId: null,
-    state: "not-started",
+    isRunning: false,
     isThinking: false,
-    thought: null,
+    thoughts: [],
   };
 
-  public async syncUI(partial?: Partial<AgentUIState>) {
+  public async syncUI(
+    partial?: Partial<AgentUIState> & { thought?: string }
+  ) {
     if (this.tabId === null) return;
     if (partial) {
+      const { thought, ...rest } = partial;
+      let newThoughts = rest.thoughts ?? this.uiState.thoughts;
+      if (thought !== undefined && thought !== null) {
+        newThoughts = [...newThoughts, thought];
+      }
       this.uiState = {
         ...this.uiState,
-        ...partial,
-        state: this.state,
+        ...rest,
+        thoughts: newThoughts,
         goal: this.goal,
       };
     }
@@ -77,9 +83,8 @@ export class Agent {
   }
 
   public stop(customThought?: string) {
-    this.state = "finished";
     this.syncUI({
-      state: "finished",
+      isRunning: false,
       isThinking: false,
       thought: customThought || "Stopped",
       targetId: null,
@@ -96,16 +101,16 @@ export class Agent {
     }
 
     if (event.type === "START") {
-      if (this.state === "not-started") {
-        this.goal = event.text;
-        this.runGameLoop();
-        return { isOk: true, message: "Started" };
-      } else if (this.state === "finished") {
-        this.history.push({ role: "USER", parts: [{ text: event.text }] });
-        this.runGameLoop();
-        return { isOk: true, message: "Started" };
+      if (this.uiState.isRunning) {
+        return { isOk: false, message: "Cannot start while running" };
       }
-      return { isOk: false, message: "Cannot start while running" };
+      if (this.history.length === 0) {
+        this.goal = event.text;
+      } else {
+        this.history.push({ role: "USER", parts: [{ text: event.text }] });
+      }
+      this.runGameLoop();
+      return { isOk: true, message: "Started" };
     }
 
     return { isOk: false, message: `Unknown event type ${event.type}` };
@@ -392,23 +397,22 @@ Respond ONLY with a JSON object matching one of the tools.`;
   }
 
   async runGameLoop() {
-    if (this.state === "running") {
+    if (this.uiState.isRunning) {
       return console.log("already running");
     }
 
-    this.state = "running";
-    this.syncUI({ thought: `${this.goal}`, targetId: null });
+    this.syncUI({ isRunning: true, thought: `${this.goal}`, targetId: null });
     await this.sleep(1000);
 
     let previousActionStatus = "None (first step)";
 
     for (let step = 1; step <= 30; step++) {
-      if (this.state !== "running") {
+      if (!this.uiState.isRunning) {
         console.log("Agent execution stopped by user.");
         break;
       }
       const snapResult = await this.getUISnapshot();
-      if (this.state !== "running") break;
+      if (!this.uiState.isRunning) break;
       if (!snapResult.success) {
         previousActionStatus = `Snapshot Error: ${snapResult.error}`;
         await this.sleep(2000);
@@ -439,12 +443,12 @@ Respond ONLY with a JSON object matching one of the tools.`;
 
       this.printActivity(systemPrompt, turnMessage);
 
-      if (this.state !== "running") break;
+      if (!this.uiState.isRunning) break;
       this.syncUI({ isThinking: true });
       const modelOut = await this.callModel(systemPrompt, turnMessage);
       // const modelOut = await this.fakeCallModel(systemPrompt, turnMessage);
       this.syncUI({ isThinking: false });
-      if (this.state !== "running") break;
+      if (!this.uiState.isRunning) break;
 
       if (!modelOut.success) {
         if (modelOut.sleepMs > 0) {
@@ -452,7 +456,7 @@ Respond ONLY with a JSON object matching one of the tools.`;
             thought: `Rate limited. Waiting ${Math.ceil(modelOut.sleepMs / 1000)}s...`,
           });
           await this.sleep(modelOut.sleepMs);
-          if (this.state !== "running") break;
+          if (!this.uiState.isRunning) break;
           continue;
         } else {
           this.syncUI({ thought: `API Error: ${modelOut.error}` });
@@ -535,7 +539,11 @@ Respond ONLY with a JSON object matching one of the tools.`;
         previousActionStatus = uiRes.message;
       }
 
-      if (this.state !== "running") break;
+      if (!this.uiState.isRunning) break;
+    }
+
+    if (this.uiState.isRunning) {
+      this.stop("Finished max steps");
     }
   }
 }
