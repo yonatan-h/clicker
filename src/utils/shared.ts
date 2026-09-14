@@ -1,19 +1,14 @@
 import { browser } from "wxt/browser";
+import type { TreeNode } from "../harness/tools/tree";
 
 export const ID_ATTR = "data-clicker4jf8-id";
 
-export type AgentUIState = {
-  goal: string;
+export type UIState = {
   targetId: number | null;
   isThinking: boolean;
   isRunning: boolean;
   thoughts: string[];
 };
-
-export type UIRequest =
-  | { type: "SYNC_STATE"; state: AgentUIState }
-  | { type: "DO_CLICK"; id: number; state: AgentUIState }
-  | { type: "DO_TYPE"; id: number; text: string; state: AgentUIState };
 
 export type UIResponse = { message: string; isError: boolean };
 
@@ -42,14 +37,19 @@ export type BGRequest =
 export type BGResponse = {
   message: string;
   isOk: boolean;
-  state?: AgentUIState | null;
+  state?: UIState | null;
 };
 
 export type SnapshotResult =
-  | { success: true; snapshot: string; pageTitle: string; pageUrl: string }
+  | {
+      success: true;
+      root: TreeNode;
+      pageTitle: string;
+      pageUrl: string;
+    }
   | {
       success: false;
-      snapshot: string;
+      root: null;
       pageTitle: string;
       pageUrl: string;
       error: string;
@@ -66,19 +66,5 @@ export const sendToBg = async (req: BGRequest): Promise<BGResponse> => {
     );
   } catch (err: any) {
     return { isOk: false, message: JSON.stringify(err) };
-  }
-};
-
-export const sendToUI = async (
-  tabId: number,
-  req: UIRequest,
-): Promise<UIResponse> => {
-  try {
-    const res = await browser.tabs.sendMessage(tabId, req);
-    return (
-      (res as UIResponse) || { isError: true, message: "No response from UI" }
-    );
-  } catch (err: any) {
-    return { isError: true, message: JSON.stringify(err) };
   }
 };

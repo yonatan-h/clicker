@@ -4,7 +4,7 @@ import {
   ID_ATTR,
   type UIResponse,
   type UIRequest,
-  type AgentUIState,
+  type UIState,
   sendToBg,
 } from "@/src/utils/shared";
 import { getApiKey, getGoal, storeGoal } from "@/src/utils/storage";
@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ArrowRight, RotateCcw, Square, Loader2 } from "lucide-react";
 
 export default function ClickerApp() {
-  const [uiState, setUiState] = useState<AgentUIState>({
+  const [uiState, setUiState] = useState<UIState>({
     goal: "",
     targetId: null,
     isThinking: false,
@@ -125,62 +125,12 @@ export default function ClickerApp() {
     });
 
     const listener = (
-      _request: unknown,
+      request: unknown,
       _sender: any,
-      _sendResponse: Function,
+      sendResponse: Function,
     ) => {
-      const req = _request as UIRequest;
-      setUiState(req.state);
-
-      const send = (resp: UIResponse) => {
-        _sendResponse(resp);
-      };
-
-      const elNotFound = (id: number) => ({
-        message: `Element with id=${id} not found`,
-        isError: true,
-      });
-      const ok = () => ({
-        message: `Ok`,
-        isError: false,
-      });
-
-      switch (req.type) {
-        case "SYNC_STATE": {
-          send(ok());
-          break;
-        }
-
-        case "DO_CLICK": {
-          const el = findEl(req.id);
-          if (!el) return send(elNotFound(req.id));
-          el.click();
-          send(ok());
-          break;
-        }
-
-        case "DO_TYPE": {
-          const el = findEl(req.id);
-          if (!el) return send(elNotFound(req.id));
-          if (
-            !(el instanceof HTMLInputElement) &&
-            !(el instanceof HTMLTextAreaElement)
-          ) {
-            return send({
-              message: `Element with id=${req.id} is not an input, but an ${el.tagName}`,
-              isError: true,
-            });
-          }
-
-          el.focus();
-          el.value = req.text;
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-          send(ok());
-          break;
-        }
-      }
-      return true;
+      setUiState(request as UIState);
+      sendResponse(true);
     };
 
     browser.runtime.onMessage.addListener(listener);

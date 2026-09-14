@@ -1,6 +1,5 @@
 import { browser } from "wxt/browser";
-import { takeSnapshot } from "@/src/snapshot/snapshot";
-import { Agent } from "../src/harness/Agent";
+import { Loop } from "../src/harness/Loop";
 import { storeApiKey, storeGoal, getApiKey } from "../src/utils/storage";
 import type { BGRequest, BGResponse } from "@/src/utils/shared";
 
@@ -11,24 +10,22 @@ const getCurTabId = async (): Promise<number | null> => {
   return id;
 };
 
-let activeAgent: Agent | null = null;
+let loop: Loop | null = null;
 
-const initAgent = async () => {
+const setAgentLoop = async () => {
   const key = await getApiKey();
-  if (key) {
-    activeAgent = new Agent(key);
-  } else {
-    activeAgent = null;
+  const tabId = await getCurTabId();
+  if (key && tabId !== null) {
+    loop = new Loop(key, tabId);
   }
 };
 
 export default defineBackground(() => {
-  initAgent();
+  setAgentLoop();
 
   browser.runtime.onMessage.addListener(
     async (message: any, _sender, _send) => {
       const req = message as BGRequest;
-      console.log("🚀 ~ req:", req);
       const sendResponse = (res: BGResponse) => {
         console.log("🚀 ~ sendResponse ~ res:", res);
         _send(res);
@@ -36,23 +33,20 @@ export default defineBackground(() => {
 
       if (req.type === "UPDATE_API_KEY") {
         await storeApiKey(req.apiKey);
-        await initAgent();
+        await setAgentLoop();
         sendResponse({ isOk: true, message: "API Key updated" });
-      } else if (req.type === "CAPTURE_SNAPSHOT") {
-        const id = await getCurTabId();
-        if (id !== null) {
-          await takeSnapshot(id);
-        }
-        sendResponse({ isOk: true, message: "Snapshot started" });
       } else if (req.type === "RESET") {
-        await initAgent();
-        sendResponse({ isOk: true, message: "Agent reset" });
+        if (loop) {
+          loop.stop();
+        }
+        await setAgentLoop();
+        sendResponse({ isOk: true, message: "Agent loop reset" });
       } else {
-        if (activeAgent) {
-          if (_sender.tab?.id) {
-            activeAgent.tabId = _sender.tab.id;
-          }
-          const res = activeAgent.processEvent(req);
+        if (!loop) {
+          await setAgentLoop();
+        }
+        if (loop) {
+          const res = loop.processEvent(req);
           sendResponse(res);
         } else {
           sendResponse({
