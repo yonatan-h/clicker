@@ -1,23 +1,24 @@
 import { browser } from "wxt/browser";
-import { getTree, stringifyTree, toTreeNode, type TreeNode } from "./tree";
+import { getBody, stringifyTree, type TreeNode } from "./tree";
 import { ID_ATTR } from "../../utils/shared";
+import type { Loop } from "../Loop";
 
-export class Page {
+export class Node {
   constructor(
-    public tabId: number,
-    private print: Function
+    public _treeNode: TreeNode,
+    private page: Page,
   ) {}
 
-  //dont use. only for testing scripts.
-  async _testPrint(...thing: any[]): Promise<void> {
-    return await this._run(thing, (...thing) =>
-      console.log(...thing, "(test print)"),
-    );
+  text() {
+    return this._treeNode.text;
+  }
+  tag() {
+    return this._treeNode.tag.toLowerCase();
   }
 
-  async click(node: TreeNode): Promise<void> {
-    await this._run(
-      [node.id, ID_ATTR] as [number, string],
+  async click() {
+    await this.page._run(
+      [this._treeNode.id, ID_ATTR] as [number, string],
       (targetId, idAttr) => {
         const el = document.querySelector(`[${idAttr}="${targetId}"]`);
         if (!(el instanceof HTMLElement)) {
@@ -28,9 +29,9 @@ export class Page {
     );
   }
 
-  async type(node: TreeNode, text: string): Promise<void> {
-    await this._run(
-      [node.id, text, ID_ATTR] as [number, string, string],
+  async type(text: string): Promise<void> {
+    await this.page._run(
+      [this._treeNode.id, text, ID_ATTR] as [number, string, string],
       (targetId, val, idAttr) => {
         const el = document.querySelector(`[${idAttr}="${targetId}"]`);
         if (!(el instanceof HTMLElement)) {
@@ -54,92 +55,118 @@ export class Page {
     );
   }
 
+  async _token(): Promise<string> {
+    const str = stringifyTree(this._treeNode, 0, false);
+    const tokens = str.match(/\w+/g)?.length || 0;
+    return `${tokens}`;
+  }
+
+  static describe() {
+    return `Node: Wraps an html element for direct interaction.
+  node.click() - Clicks this element.
+  node.type(text: string) - Types text into this input/textarea element.
+  node.text() - Returns the text of the element.
+  node.tag() - Returns the lowercase tag name of the element.
+`;
+  }
+}
+
+export class Page {
+  constructor(
+    public tabId: number,
+    private print: Function,
+    private loop: Loop,
+  ) {}
+
+  //dont use. only for testing scripts.
+  async _testPrint(...thing: any[]): Promise<void> {
+    const res = await this._run(thing, (...thing) =>
+      console.log(...thing, "(test print)"),
+    );
+    this.loop.syncUI({ thought: `Printed '${thing}'` });
+    return res;
+  }
+
   async navigate(url: string): Promise<void> {
     const dest = url.includes("://") ? url : `https://${url}`;
     await browser.tabs.update(this.tabId, { url: dest });
+    this.loop.syncUI({ thought: "navigated to " + url });
   }
 
-  async find_node(
-    id?: number,
-    parent?: TreeNode | null,
-    tag?: string,
-    contains?: string,
-    contains_oneof?: string[],
-  ): Promise<TreeNode | null> {
-    const root = parent || (await this.get_root());
-
-    const search = (node: TreeNode): TreeNode | null => {
-      let isMatch = true;
-
-      if (id !== undefined && node.id !== id) isMatch = false;
-      if (tag !== undefined && node.tag !== tag) isMatch = false;
-
-      if (isMatch && (contains !== undefined || contains_oneof !== undefined)) {
-        const textContent = (node.text || "").toLowerCase();
-
-        if (
-          contains !== undefined &&
-          !textContent.includes(contains.toLowerCase())
-        ) {
-          isMatch = false;
-        }
-
-        if (isMatch && contains_oneof !== undefined) {
-          const matchOne = contains_oneof.some((c) =>
-            textContent.includes(c.toLowerCase()),
-          );
-          if (!matchOne) isMatch = false;
-        }
-      }
-
-      if (isMatch) {
-        // If they provided only parent, then the parent itself will match immediately
-        // if no other criteria are given. To avoid returning the parent immediately when searching for children,
-        // wait, if no criteria provided, it returns the root/parent immediately. That is correct behavior.
-        return node;
-      }
-
-      for (const child of node.children) {
-        const found = search(child);
-        if (found) return found;
-      }
-
-      return null;
-    };
-
-    return search(root);
+  async print_tree(node?: Node) {
+    node = node || (await this.body());
+    const root = (await this.body())._treeNode;
+    const strigified = stringifyTree(node?._treeNode || root, 0, false);
+    this.print(strigified);
+    this.loop.syncUI({ thought: `Printed ${node.tag()}` });
   }
 
-  async get_root(): Promise<TreeNode> {
-    const root = await this._run([ID_ATTR], getTree);
-    return root;
-  }
-
-  async print_tree(node?: TreeNode) {
-    const root = await this.get_root();
-    const strigified = stringifyTree(node || root, 0, false);
-    this.print(strigified)
-  }
-
-  describe() {
-    return `
-TreeNode: Represents an interactive element on the page.
-- id (number): Unique identifier for the element.
-- children (TreeNode[]): List of child elements.
-- props (Record<string, string>): Semantic properties and HTML attributes.
-- text (string): Visible text content of the element.
-
-Available Methods:
-page.get_root(): TreeNode - Returns the root node of the current interactive DOM tree snapshot.
-page.find_node(id?: number, parent?: TreeNode | null, tag?: string, contains?: string, contains_oneof?: string[]): TreeNode | null - Finds a node in the tree matching the given optional criteria.
-page.click(node: TreeNode): void - Clicks the element associated with the given node.
-page.type(node: TreeNode, text: string): void - Types text into the input element associated with the given node.
-page.navigate(url: string): void - Navigates the page to the specified URL.
-page.print_tree(node: TreeNode): void - Prints a stringified, human-readable tree representation of the given node.
+  static describe() {
+    return `Page: Controls the browser tab.
+  page.navigate(url: string) - Navigates to the given URL.
+  page.print_tree(node?: Node) - Prints the interactive DOM tree (or a subtree from a Node).
+  page.body(): Node - Returns the root Element of the current page.
+  page.find_by_id(id: int): Node | None - Returns the Node with the specified ID.
 `;
   }
 
-  private async _run<Args extends any[], Return>(
+  async find_by_id(id: number): Promise<Node|null> {
+    const rootNode = await this.body();
+    const walk = (node: TreeNode): TreeNode | null => {
+      if (node.id === id) return node;
+      for (const child of node.children) {
+        const found = walk(child);
+        if (found) return found;
+      }
+      return null;
+    };
+    
+    const foundNode = walk(rootNode._treeNode);
+    return foundNode ? new Node(foundNode, this) : null;
+  }
+
+  async body(): Promise<Node> {
+    const root = await this._run([ID_ATTR], getBody);
+    return new Node(root, this);
+  }
+
+  async _getSummary(): Promise<string> {
+    //count of each node type, page title, page url, count of tokens
+    const tree = await this.body();
+
+    const tagCounts: Record<string, number> = {};
+    let totalNodes = 0;
+    let totalTextChars = 0;
+
+    const walk = (node: TreeNode) => {
+      totalNodes++;
+      tagCounts[node.tag] = (tagCounts[node.tag] || 0) + 1;
+      if (node.text) totalTextChars += node.text.length;
+      for (const child of node.children) {
+        walk(child);
+      }
+    };
+    walk(tree._treeNode);
+
+    const tab = await browser.tabs.get(this.tabId);
+    const title = tab.title || "(no title)";
+    const url = tab.url || "(no url)";
+
+    const tagSummary = Object.entries(tagCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag, count]) => `${tag}: ${count}`)
+      .join(", ");
+
+    return [
+      `url: ${url}`,
+      `title: ${title}`,
+      `nodes: ${totalNodes}`,
+      `~tokens: ${await tree._token()}`,
+      `tags: ${tagSummary}`,
+    ].join("\n");
+  }
+
+  async _run<Args extends any[], Return>(
     args: Args,
     callback: (...args: Args) => Return,
   ): Promise<Return> {

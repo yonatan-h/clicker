@@ -3,11 +3,10 @@ import { useState, useEffect, useRef } from "react";
 import {
   ID_ATTR,
   type UIResponse,
-  type UIRequest,
   type UIState,
   sendToBg,
 } from "@/src/utils/shared";
-import { getApiKey, getGoal, storeGoal } from "@/src/utils/storage";
+import { getGeminiApiKey, getGoal, storeGoal } from "@/src/utils/storage";
 import Arrow from "./arrow/Arrow";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,7 +14,6 @@ import { ArrowRight, RotateCcw, Square, Loader2 } from "lucide-react";
 
 export default function ClickerApp() {
   const [uiState, setUiState] = useState<UIState>({
-    goal: "",
     targetId: null,
     isThinking: false,
     isRunning: false,
@@ -78,7 +76,7 @@ export default function ClickerApp() {
       return;
     }
 
-    const key = await getApiKey();
+    const key = await getGeminiApiKey();
     if (!key) {
       alert(
         "Please open the extension popup and set your Gemini API Key first.",
@@ -120,7 +118,6 @@ export default function ClickerApp() {
     sendToBg({ type: "GET_STATE" }).then((res) => {
       if (res.isOk && res.state) {
         setUiState(res.state);
-        setInput(res.state.goal);
       }
     });
 

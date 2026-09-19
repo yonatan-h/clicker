@@ -1,6 +1,7 @@
 import { browser } from "wxt/browser";
 
-const API_KEY = `api-key`;
+const GEMINI_API_KEY = `api-key`;
+const JEV_API_KEY = `jev-api-key`;
 const GOAL = 'goal';
 
 async function store(key: string, val: any) {
@@ -19,10 +20,6 @@ async function get(key: string): Promise<any | null> {
   return res[key] || null;
 }
 
-export async function getApiKey(): Promise<string | null> {
-  const res = await get(API_KEY);
-  return res ? res.val : null;
-}
 
 export async function getGoal(): Promise<string | null> {
   const res = await get(GOAL);
@@ -33,6 +30,20 @@ export async function storeGoal(val: string) {
   return store(GOAL, { val });
 }
 
-export async function storeApiKey(val: string) {
-  return store(API_KEY, { val });
+export async function getGeminiApiKey(): Promise<string | null> {
+  const res = await get(GEMINI_API_KEY);
+  return res ? res.val : null;
+}
+
+export async function storeGeminiApiKey(val: string) {
+  return store(GEMINI_API_KEY, { val });
+}
+
+export async function getJevApiKey(): Promise<string | null> {
+  const res = await get(JEV_API_KEY);
+  return res ? res.val : null;
+}
+
+export async function storeJevApiKey(val: string) {
+  return store(JEV_API_KEY, { val });
 }

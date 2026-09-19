@@ -1,71 +1,88 @@
-import ReactDOM from "react-dom/client";
 import "@/assets/tailwind.css";
 import React, { useEffect, useState } from "react";
-import { browser } from "wxt/browser";
-import { getApiKey } from "@/src/utils/storage";
+import { getGeminiApiKey } from "@/src/utils/storage";
 import { type BGRequest, type BGResponse, sendToBg } from "@/src/utils/shared";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
-console.log("here");
 
 export default function Popup() {
-  const [apiKey, setApiKey] = useState("");
-  const [isStarting, setIsStarting] = useState(false);
+  const [geminiApiKey, setGeminiApiKey] = useState("");
+  const [jevApiKey, setJevApiKey] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    getApiKey().then((key) => {
-      if (key) setApiKey(key);
+    getGeminiApiKey().then((key) => {
+      if (key) setGeminiApiKey(key);
     });
   }, []);
 
   const handleSave = async () => {
-    const trimmedKey = apiKey.trim();
-
-    if (!trimmedKey) {
+    if (!geminiApiKey.trim()) {
       alert("Please enter your Gemini API Key first.");
       return;
     }
 
-    setIsStarting(true);
-    const req: BGRequest = { type: "UPDATE_API_KEY", apiKey: trimmedKey };
-    await sendToBg(req);
-    setIsStarting(false);
-  };
+    if (!jevApiKey.trim()) {
+      alert("Please enter your Jev API Key first.");
+      return;
+    }
 
-  const handleSnapshot = async () => {
-    const req: BGRequest = { type: "CAPTURE_SNAPSHOT" };
+    setIsSaving(true);
+    const req: BGRequest = {
+      type: "UPDATE_API_KEYS",
+      geminiApiKey: geminiApiKey.trim(),
+      jevApiKey: jevApiKey.trim(),
+    };
     await sendToBg(req);
+    setIsSaving(false);
   };
 
   return (
-    <div className="rounded flex-1 bg-white p-3 w-80 flex flex-col gap-3 text-gray-800">
-      <h2 className="text-xl font-black text-primary text-center">Clicker</h2>
+    <div className="rounded flex-1 bg-white p-4 w-80 flex flex-col gap-4 text-gray-800">
+      <h2 className="text-xl font-black text-primary text-center mb-2">
+        Clicker
+      </h2>
 
-      <div className="flex flex-col gap-1">
-        <label className="text-xl font-bold text-gray-500 ml-2">Api Key</label>
-        <input
+      <div className="flex flex-col gap-2">
+        <Label
+          htmlFor="gemini-api-key"
+          className="text-gray-500 font-semibold ml-1"
+        >
+          Gemini API Key
+        </Label>
+        <Input
+          id="gemini-api-key"
           type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="sk-..."
-          className="rounded-2xl bg-gray-50  border-gray-400  p-2 "
+          value={geminiApiKey}
+          onChange={(e) => setGeminiApiKey(e.target.value)}
         />
       </div>
 
-      <div className="flex flex-col gap-3 mt-2">
-        <button
+      <div className="flex flex-col gap-2">
+        <Label
+          htmlFor="jev-api-key"
+          className="text-gray-500 font-semibold ml-1"
+        >
+          Jev API Key
+        </Label>
+        <Input
+          id="jev-api-key"
+          type="password"
+          value={jevApiKey}
+          onChange={(e) => setJevApiKey(e.target.value)}
+        />
+      </div>
+
+      <div className="flex flex-col gap-2 mt-4">
+        <Button
           onClick={handleSave}
-          disabled={isStarting}
-          className="bg-primary text-white font-bold p-2 rounded-full "
+          disabled={isSaving}
+          className="w-full font-bold"
         >
-          {isStarting ? "Saving..." : "Save API Key"}
-        </button>
-        <button
-          onClick={handleSnapshot}
-          className="bg-gray-100 text-gray-600 font-bold p-2 rounded-full "
-        >
-          Snapshot
-        </button>
+          {isSaving ? "Saving..." : "Save API Keys"}
+        </Button>
       </div>
     </div>
   );

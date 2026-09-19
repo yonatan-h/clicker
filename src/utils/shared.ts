@@ -18,11 +18,9 @@ export type BGRequest =
       text: string;
     }
   | {
-      type: "UPDATE_API_KEY";
-      apiKey: string;
-    }
-  | {
-      type: "CAPTURE_SNAPSHOT";
+      type: "UPDATE_API_KEYS";
+      geminiApiKey: string;
+      jevApiKey: string;
     }
   | {
       type: "STOP";

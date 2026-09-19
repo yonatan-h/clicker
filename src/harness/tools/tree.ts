@@ -23,7 +23,7 @@ export function toTreeNode(cnode: CNode): TreeNode {
   return treeNode;
 }
 
-export function getTree(ID_ATTR: string): TreeNode {
+export function getBody(ID_ATTR: string): TreeNode {
   const count = (tree: CNode) => {
     const countNodes = (node: CNode) => {
       let nodes = 1;
@@ -50,7 +50,9 @@ export function getTree(ID_ATTR: string): TreeNode {
   const localToTreeNode = (cnode: CNode): TreeNode => {
     const { element, ...treeNode } = cnode;
     treeNode.tag = cnode.element.tagName.toLowerCase();
-    treeNode.children = cnode._cNodeChildren.map((child) => localToTreeNode(child));
+    treeNode.children = cnode._cNodeChildren.map((child) =>
+      localToTreeNode(child),
+    );
     return treeNode;
   };
 
@@ -410,7 +412,11 @@ export function getTree(ID_ATTR: string): TreeNode {
   return localToTreeNode(root);
 }
 
-export function stringifyTree(node: TreeNode, depth: number, devMode: boolean):string{
+export function stringifyTree(
+  node: TreeNode,
+  depth: number,
+  devMode: boolean,
+): string {
   const GRAY = "\x1b[90m";
   const RESET = "\x1b[0m";
   const propsStr = Object.entries(node.props)
@@ -429,4 +435,3 @@ export function stringifyTree(node: TreeNode, depth: number, devMode: boolean):s
   }
   return str;
 }
-

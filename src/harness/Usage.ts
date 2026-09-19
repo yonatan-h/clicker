@@ -8,6 +8,7 @@ export class Usage {
   private usageSettings: UsageSettings;
   private tokenLog: { timestamp: number; tokens: number }[] = [];
   private openTimeStamp = 0;
+  private blockForMsReason = "";
 
   private countTokens(text: string): number {
     return text.match(/[\w]+|[^\s\w]/g)?.length || 0;
@@ -23,8 +24,9 @@ export class Usage {
     });
   }
 
-  blockForMs(milliSeconds: number) {
+  blockForMs(milliSeconds: number, reason:string) {
     this.openTimeStamp = new Date().getTime() + milliSeconds;
+    this.blockForMsReason = reason;
   }
 
   getWait(): { ms: number; reason: string } {
@@ -36,7 +38,7 @@ export class Usage {
     );
 
     if (now < this.openTimeStamp) {
-      return { ms: this.openTimeStamp - now, reason: "Manually blocked" };
+      return { ms: this.openTimeStamp - now, reason: this.blockForMsReason };
     }
 
     const oneMinMs = 60 * 1000;

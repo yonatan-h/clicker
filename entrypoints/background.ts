@@ -1,6 +1,12 @@
 import { browser } from "wxt/browser";
 import { Loop } from "../src/harness/Loop";
-import { storeApiKey, storeGoal, getApiKey } from "../src/utils/storage";
+import {
+  storeGeminiApiKey,
+  storeGoal,
+  getGeminiApiKey,
+  storeJevApiKey,
+  getJevApiKey,
+} from "../src/utils/storage";
 import type { BGRequest, BGResponse } from "@/src/utils/shared";
 
 const getCurTabId = async (): Promise<number | null> => {
@@ -13,10 +19,11 @@ const getCurTabId = async (): Promise<number | null> => {
 let loop: Loop | null = null;
 
 const setAgentLoop = async () => {
-  const key = await getApiKey();
+  const geminiApiKey = await getGeminiApiKey();
+  const jevApiKey = await getJevApiKey();
   const tabId = await getCurTabId();
-  if (key && tabId !== null) {
-    loop = new Loop(key, tabId);
+  if (geminiApiKey && jevApiKey && tabId !== null) {
+    loop = new Loop(geminiApiKey, jevApiKey);
   }
 };
 
@@ -31,10 +38,13 @@ export default defineBackground(() => {
         _send(res);
       };
 
-      if (req.type === "UPDATE_API_KEY") {
-        await storeApiKey(req.apiKey);
+      if (req.type === "UPDATE_API_KEYS") {
+        await Promise.all([
+          storeGeminiApiKey(req.geminiApiKey),
+          storeJevApiKey(req.jevApiKey),
+        ]);
         await setAgentLoop();
-        sendResponse({ isOk: true, message: "API Key updated" });
+        sendResponse({ isOk: true, message: "API Keys updated" });
       } else if (req.type === "RESET") {
         if (loop) {
           loop.stop();
@@ -46,7 +56,7 @@ export default defineBackground(() => {
           await setAgentLoop();
         }
         if (loop) {
-          const res = loop.processEvent(req);
+          const res = await loop.processEvent(req);
           sendResponse(res);
         } else {
           sendResponse({

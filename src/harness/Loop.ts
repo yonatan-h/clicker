@@ -5,7 +5,7 @@ import { Interactor } from "./Interactor";
 import { Usage } from "./Usage";
 
 export type HistoryContentItem = {
-  role: "USER" | "MODEL";
+  role: "user" | "model";
   parts: { text: string }[];
 };
 
@@ -17,11 +17,13 @@ export class Loop {
   private interactor: Interactor;
   private usage: Usage;
   private tabId: number;
-  private apiKey: string;
+  private geminiApiKey: string;
+  private jevApiKey: string;
 
-  constructor(apiKey: string, tabId: number) {
-    this.apiKey = apiKey;
-    this.tabId = tabId;
+  constructor(geminiApiKey: string, jevApiKey:string) {
+    this.geminiApiKey = geminiApiKey;
+    this.jevApiKey = jevApiKey;
+    this.tabId = -1;
     this.interactor = new Interactor(this);
     this.usage = new Usage({
       reqPerMin: 30,
@@ -66,7 +68,7 @@ export class Loop {
       targetId: null,
     });
   }
-  public processEvent(event: BGRequest): BGResponse {
+  public async processEvent(event: BGRequest): Promise<BGResponse> {
     if (event.type === "STOP") {
       this.stop();
       return { isOk: true, message: "Stopped" };
@@ -80,7 +82,20 @@ export class Loop {
       if (this.uiState.isRunning) {
         return { isOk: false, message: "Cannot start while running" };
       }
-      this.runGameLoop(event.text);
+
+      try {
+        const tabs = await browser.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const tab = tabs[0];
+        if (tab?.id === undefined) throw "Could not get tab";
+        this.tabId = tab.id;
+        this.runGameLoop(event.text);
+      } catch (e: any) {
+        this.syncUI({ thought: `${e}` });
+        return { isOk: false, message: `${e}` };
+      }
       return { isOk: true, message: "Started" };
     }
 
@@ -106,7 +121,7 @@ export class Loop {
     systemPrompt: string,
     history: HistoryContentItem[],
   ): Promise<CallModelResult> {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=${encodeURIComponent(this.apiKey)}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=${encodeURIComponent(this.geminiApiKey)}`;
 
     try {
       const res = await fetch(url, {
@@ -115,7 +130,7 @@ export class Loop {
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemPrompt }] },
           contents: history,
-          generationConfig: { temperature: 0.1 },
+          generationConfig: { temperature: 1 },
         }),
       });
 
@@ -144,9 +159,17 @@ export class Loop {
           };
         }
 
+        let friendlyMessage = errText;
+        try {
+          const errJson = JSON.parse(errText);
+          if (errJson.error && errJson.error.message) {
+            friendlyMessage = errJson.error.message;
+          }
+        } catch (e) {}
+
         return {
           success: false,
-          error: `API Error (${res.status}): ${errText}`,
+          error: `API Error (${res.status}): ${friendlyMessage}`,
           sleepMs: 0,
         };
       }
@@ -156,7 +179,14 @@ export class Loop {
       const finalPart =
         parts.find((p: any) => !p.thought) || parts[parts.length - 1];
 
-      return { success: true, response: finalPart.text, sleepMs: 0 };
+      let response = finalPart.text;
+      const codeBlockMatch = response.match(/```[a-z]*\n([\s\S]*?)\n```/i);
+      if (codeBlockMatch) {
+        response = codeBlockMatch[1];
+      }
+      response = response.trim();
+
+      return { success: true, response: response, sleepMs: 0 };
     } catch (err: any) {
       console.error("Network error:", err);
       return {
@@ -179,7 +209,7 @@ export class Loop {
     if (this.uiState.isRunning) {
       return console.log("already running");
     }
-    this.interactor.seedConvo(userText);
+    await this.interactor.seedConvo(userText);
     this.syncUI({ isRunning: true, thought: userText });
 
     for (let step = 1; step <= 1000; step++) {
@@ -191,6 +221,7 @@ export class Loop {
       const wait = this.usage.getWait();
       const seconds = Math.ceil(wait.ms / 1000);
       for (let i = 0; i < seconds; i++) {
+        if (!this.uiState.isRunning) break;
         this.syncUI({
           thought: `Continuing in ${seconds - i}seconds... ${wait.reason}`,
         });
@@ -202,17 +233,20 @@ export class Loop {
       if (!this.uiState.isRunning) break;
 
       this.usage.updateUsage(`${systemPrompt}\n${history.join("\n")}`);
+
+      this.syncUI({ isThinking: true });
       const modelOut = await this.fakeCallModel(systemPrompt, history);
-      // const modelOut = await this.callModel(systemPrompt, turnMessage);
+      // const modelOut = await this.callModel(systemPrompt, history);
+      this.syncUI({ isThinking: false });
       if (!this.uiState.isRunning) break;
 
       if (!modelOut.success) {
         if (modelOut.sleepMs > 0) {
-          this.usage.blockForMs(modelOut.sleepMs);
+          this.usage.blockForMs(modelOut.sleepMs, modelOut.error);
           continue;
         } else {
-          this.syncUI({ thought: `API Error: ${modelOut.error}` });
-          await this.sleep(1000);
+          this.usage.blockForMs(1000, modelOut.error);
+          this.syncUI({ thought: `${modelOut.error}` });
           continue;
         }
       }
