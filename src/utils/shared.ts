@@ -4,10 +4,18 @@ import type { TreeNode } from "../harness/tools/tree";
 export const ID_ATTR = "data-clicker4jf8-id";
 
 export type UIState = {
+  awaitedAnimMs: number;
   targetId: number | null;
   isThinking: boolean;
   isRunning: boolean;
   thoughts: string[];
+  lastInput: string;
+  ask: null | {
+    id: number;
+    question: string;
+    options: string[];
+    includeOther: boolean;
+  };
 };
 
 export type UIResponse = { message: string; isError: boolean };
@@ -30,6 +38,11 @@ export type BGRequest =
     }
   | {
       type: "RESET";
+    }
+  | {
+      id: number;
+      type: "ANSWER";
+      ans: string;
     };
 
 export type BGResponse = {

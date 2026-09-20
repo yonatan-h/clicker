@@ -2,11 +2,18 @@ import { browser } from "wxt/browser";
 import { getBody, stringifyTree, type TreeNode } from "./tree";
 import { ID_ATTR } from "../../utils/shared";
 import type { Loop } from "../Loop";
+import type { Interactor } from "../Interactor";
+type LoadingState = {
+  pendingRequests: number;
+  readyState: Document["readyState"];
+};
 
 export class Node {
   constructor(
     public _treeNode: TreeNode,
     private page: Page,
+    private loop: Loop,
+    private interactor: Interactor,
   ) {}
 
   text() {
@@ -16,7 +23,17 @@ export class Node {
     return this._treeNode.tag.toLowerCase();
   }
 
+  naturalDescription(): string {
+    return `${this._treeNode.tag} ${this._treeNode.text ? `(${this._treeNode.text})` : ""}`;
+  }
+
   async click() {
+    await this.page._awaitPage();
+    await this.loop.syncUI({
+      thought: `Clicking on ${this.naturalDescription()}`,
+    });
+    await this.loop.sleep(300);
+    await this.loop.syncUI({ targetId: this._treeNode.id, awaitedAnimMs: 300 });
     await this.page._run(
       [this._treeNode.id, ID_ATTR] as [number, string],
       (targetId, idAttr) => {
@@ -27,12 +44,35 @@ export class Node {
         el.click();
       },
     );
+
+    this.interactor.addToHistory({
+      isUser: true,
+      pageStats: await this.page._getStats(),
+      userText: `Clicked on ${this.naturalDescription()}`,
+    });
+    await this.loop.sleep(300);
   }
 
-  async type(text: string): Promise<void> {
+  async type(
+    text: string,
+    pressEnter: boolean,
+    clearBeforeTyping: boolean,
+  ): Promise<void> {
+    await this.page._awaitPage();
+    await this.loop.syncUI({
+      thought: `Typing "${text}" into ${this.naturalDescription()}`,
+    });
+    await this.loop.sleep(300);
+    await this.loop.syncUI({ targetId: this._treeNode.id, awaitedAnimMs: 300 });
     await this.page._run(
-      [this._treeNode.id, text, ID_ATTR] as [number, string, string],
-      (targetId, val, idAttr) => {
+      [this._treeNode.id, text, ID_ATTR, pressEnter, clearBeforeTyping],
+      async (
+        targetId: number,
+        text: string,
+        idAttr: string,
+        pressEnter: boolean,
+        clearBeforeTyping: boolean,
+      ) => {
         const el = document.querySelector(`[${idAttr}="${targetId}"]`);
         if (!(el instanceof HTMLElement)) {
           throw new Error(`Element with id=${targetId} not found`);
@@ -48,11 +88,36 @@ export class Node {
         }
 
         el.focus();
-        el.value = val;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
+        if (clearBeforeTyping) {
+          el.value = "";
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+
+        const chunks = text.length > 10 ? text.split(/(\s+)/) : text.split("");
+        for (const chunk of chunks) {
+          el.value += chunk;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          await new Promise((r) => setTimeout(r, 50));
+        }
         el.dispatchEvent(new Event("change", { bubbles: true }));
+
+        if (pressEnter) {
+          el.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+          );
+          el.dispatchEvent(
+            new KeyboardEvent("keyup", { key: "Enter", bubbles: true }),
+          );
+        }
       },
     );
+
+    this.interactor.addToHistory({
+      isUser: true,
+      pageStats: await this.page._getStats(),
+      userText: `Typed "${text}" into ${this.naturalDescription()}`,
+    });
+    await this.loop.sleep(300);
   }
 
   async _token(): Promise<string> {
@@ -76,6 +141,7 @@ export class Page {
     public tabId: number,
     private print: Function,
     private loop: Loop,
+    private interactor: Interactor,
   ) {}
 
   //dont use. only for testing scripts.
@@ -88,17 +154,30 @@ export class Page {
   }
 
   async navigate(url: string): Promise<void> {
+    await this._awaitPage();
+    await this.loop.syncUI({ thought: "navigating to " + url });
+    await this.loop.sleep(300);
     const dest = url.includes("://") ? url : `https://${url}`;
     await browser.tabs.update(this.tabId, { url: dest });
-    this.loop.syncUI({ thought: "navigated to " + url });
+    await this.loop.sleep(3000);
+    await this._awaitPage();
+    this.interactor.addToHistory({
+      isUser: true,
+      pageStats: await this._getStats(),
+      userText: `Navigated to ${url}`,
+    });
   }
 
-  async print_tree(node?: Node) {
-    node = node || (await this.body());
+  async _getTree(): Promise<TreeNode> {
+    return (await this.body())._treeNode;
+  }
+
+  async print_tree(node?: Node): Promise<string> {
     const root = (await this.body())._treeNode;
     const strigified = stringifyTree(node?._treeNode || root, 0, false);
     this.print(strigified);
-    this.loop.syncUI({ thought: `Printed ${node.tag()}` });
+    this.loop.syncUI({ thought: `Printed ${node?.tag() || "root"}` });
+    return strigified;
   }
 
   static describe() {
@@ -110,7 +189,7 @@ export class Page {
 `;
   }
 
-  async find_by_id(id: number): Promise<Node|null> {
+  async find_by_id(id: number): Promise<Node | null> {
     const rootNode = await this.body();
     const walk = (node: TreeNode): TreeNode | null => {
       if (node.id === id) return node;
@@ -120,17 +199,19 @@ export class Page {
       }
       return null;
     };
-    
+
     const foundNode = walk(rootNode._treeNode);
-    return foundNode ? new Node(foundNode, this) : null;
+    return foundNode
+      ? new Node(foundNode, this, this.loop, this.interactor)
+      : null;
   }
 
   async body(): Promise<Node> {
     const root = await this._run([ID_ATTR], getBody);
-    return new Node(root, this);
+    return new Node(root, this, this.loop, this.interactor);
   }
 
-  async _getSummary(): Promise<string> {
+  async _getStats(): Promise<string> {
     //count of each node type, page title, page url, count of tokens
     const tree = await this.body();
 
@@ -163,7 +244,61 @@ export class Page {
       `nodes: ${totalNodes}`,
       `~tokens: ${await tree._token()}`,
       `tags: ${tagSummary}`,
-    ].join("\n");
+    ].join(" | ");
+  }
+
+  async _getLoadingState(): Promise<LoadingState> {
+    return await this._run([], () => {
+      type PageGlobals = typeof globalThis & {
+        __awaitPagePatched?: boolean;
+        __pendingRequests: number;
+      };
+      const g = globalThis as PageGlobals;
+
+      if (!g.__awaitPagePatched) {
+        g.__awaitPagePatched = true;
+        g.__pendingRequests = 0;
+
+        const origFetch = g.fetch.bind(g);
+        g.fetch = (...args: Parameters<typeof fetch>) => {
+          g.__pendingRequests++;
+          return origFetch(...args).finally(() => {
+            g.__pendingRequests--;
+          });
+        };
+      }
+
+      return {
+        pendingRequests: g.__pendingRequests,
+        readyState: document.readyState,
+      };
+    });
+  }
+
+  async _awaitPage(timeoutMs = 5_000) {
+    const QUIET_MS = 120;
+    const POLL_MS = 100;
+    const start = Date.now();
+    let lastActivityAt = Date.now();
+
+    while (Date.now() - start < timeoutMs) {
+      const state = await this._getLoadingState();
+      const now = Date.now();
+
+      if (state.readyState !== "complete") {
+        lastActivityAt = Date.now();
+        await this.loop.syncUI({ thought: "Waiting for page to load" });
+      } else if (state.pendingRequests > 0) {
+        lastActivityAt = Date.now();
+        await this.loop.syncUI({
+          thought: `Waiting for ${state.pendingRequests} network request(s)`,
+        });
+      } else if (now - lastActivityAt > QUIET_MS) {
+        break;
+      }
+
+      await this.loop.sleep(POLL_MS);
+    }
   }
 
   async _run<Args extends any[], Return>(

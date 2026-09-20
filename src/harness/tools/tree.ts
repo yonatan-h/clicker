@@ -1,26 +1,36 @@
-export interface TreeNode {
+export type TreeNode = {
+  id: number;
+  props: Record<string, string>;
+  text: string;
+  children: TreeNode[];
+  tag: string;
+  isInteractable: boolean;
+};
+
+export type CNode = {
   id: number;
   props: Record<string, string>;
   text: string;
   children: TreeNode[];
   tag: string;
 
+  element: Element;
   _cNodeChildren: CNode[];
   _isSemantic: boolean;
   _semanticNodes: number;
   _isInteractableNode: boolean;
   _interactableNodes: number;
-}
-
-export type CNode = TreeNode & {
-  element: Element;
 };
 
 export function toTreeNode(cnode: CNode): TreeNode {
-  const { element, ...treeNode } = cnode;
-  treeNode.tag = cnode.element.tagName.toLowerCase();
-  treeNode.children = cnode._cNodeChildren.map((child) => toTreeNode(child));
-  return treeNode;
+  return {
+    id: cnode.id,
+    tag: cnode.element.tagName.toLowerCase(),
+    props: cnode.props,
+    text: cnode.text,
+    children: cnode._cNodeChildren.map((child) => toTreeNode(child)),
+    isInteractable: cnode._isInteractableNode,
+  };
 }
 
 export function getBody(ID_ATTR: string): TreeNode {
@@ -48,12 +58,14 @@ export function getBody(ID_ATTR: string): TreeNode {
   };
 
   const localToTreeNode = (cnode: CNode): TreeNode => {
-    const { element, ...treeNode } = cnode;
-    treeNode.tag = cnode.element.tagName.toLowerCase();
-    treeNode.children = cnode._cNodeChildren.map((child) =>
-      localToTreeNode(child),
-    );
-    return treeNode;
+    return {
+      id: cnode.id,
+      tag: cnode.element.tagName.toLowerCase(),
+      props: cnode.props,
+      text: cnode.text,
+      children: cnode._cNodeChildren.map((child) => localToTreeNode(child)),
+      isInteractable: cnode._isInteractableNode,
+    };
   };
 
   const makeCNode = (element: Element) => {
@@ -426,7 +438,7 @@ export function stringifyTree(
   const textContent = node.text.replace(/\n/g, "\\n");
   let str = `${(devMode ? "| " : "\t").repeat(depth)}${node.tag} #${node.id}${
     devMode
-      ? `${GRAY} sem=${node._semanticNodes}|int=${node._interactableNodes} ${RESET}`
+      ? `${GRAY} sem=${(node as any)._semanticNodes}|int=${(node as any)._interactableNodes} ${RESET}`
       : ""
   }${propsStr ? ` ${propsStr}` : ""}${textContent ? ` > ${textContent}` : ""}\n`;
 
@@ -434,4 +446,12 @@ export function stringifyTree(
     str += stringifyTree(child, depth + 1, devMode);
   }
   return str;
+}
+
+export function listNodes(node: TreeNode): TreeNode[] {
+  const nodes: TreeNode[] = [node];
+  for (const child of node.children) {
+    nodes.push(...listNodes(child));
+  }
+  return nodes;
 }

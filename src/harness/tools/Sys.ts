@@ -7,9 +7,32 @@ export class Sys {
     private onDescription: (description: string) => void,
   ) {}
 
+  async askUser(
+    question: string,
+    options: string[],
+    includeOther: boolean,
+  ): Promise<string> {
+    const id = Date.now();
+    await this.loop.syncUI({
+      ask: {
+        id,
+        question,
+        options,
+        includeOther,
+      },
+    });
+
+    const response = await this.loop.listen("ANSWER", id);
+    if (response.type === "ANSWER") {
+      await this.loop.syncUI({ ask: null, thought: `Answered: ${response.ans}` });
+      return response.ans;
+    }
+    throw new Error("Invalid response type");
+  }
+
   async simple_describe(description: string) {
     this.onDescription(description);
-    this.loop.syncUI({ thought: `Script goal: ${description}` });
+    await this.loop.syncUI({ thought: `Script goal: ${description}` });
   }
   async end(message: string) {
     await this.loop.syncUI({ thought: message });

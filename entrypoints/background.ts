@@ -61,7 +61,7 @@ export default defineBackground(() => {
         } else {
           sendResponse({
             isOk: false,
-            message: "Req to bg not handled",
+            message: `Req to bg not handled: ${JSON.stringify(req)}`,
           });
         }
       }
