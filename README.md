@@ -5,7 +5,11 @@ A Chrome extension agent that executes natural language browser automation goals
 ## Demo
 
 <!-- insert -->
-https://github.com/user-attachments/assets/YOUR-VIDEO-ID.mp4
+
+
+https://github.com/user-attachments/assets/74981253-ef3d-41f1-83e6-58ef5b7c601e
+
+
 
 ## How It Works
 
